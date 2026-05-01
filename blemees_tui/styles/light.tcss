@@ -1,0 +1,3 @@
+/* Light theme placeholder. */
+
+Screen { background: $surface-lighten-3; color: $text; }
