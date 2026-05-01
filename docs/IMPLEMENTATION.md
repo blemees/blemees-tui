@@ -92,6 +92,108 @@ The release gate.
 
 ---
 
+## M6 — Claude Code parity sprint
+
+Brings the TUI from "chat client that drives Claude Code" to "feels like
+Claude Code, with watch mode bolted on for free." Items are independently
+shippable; sequence is by user-visible value.
+
+21. **Built-in command refresh on connect.** `discover.BUILTIN_CC_COMMANDS`
+    is a static seven-entry list — Claude Code ships ~50 + bundled skills
+    + plugin commands + MCP prompts, and the set churns. Probe `/help`
+    once per (backend, version) on first connect, parse, cache to
+    `$XDG_STATE_HOME/blemees-tui/help-<backend>-<version>.json`. Use
+    cached entries for the `/`-completion popup.
+22. **`@`-mention file completion.** Composer doesn't recognise `@` today
+    — typing `@src/auth.ts` is a literal string. Add a third pool to
+    `widgets/completion.py` that walks the active session's `cwd` (and
+    any `--add-dir`-equivalent) ranked by recency. Tag entries `file` /
+    `dir`. The Claude Code reflex most users miss in v0.1.
+23. **Permission-mode badge + `Shift+Tab` cycle.** Today the active
+    permission mode is invisible after session creation. Render a
+    coloured chip in the chat header (`⏵⏵ accept edits`, `⏸ plan`, etc.)
+    and bind `Shift+Tab` to cycle `default → acceptEdits → plan` (skip
+    `bypassPermissions` unless explicitly opted in via flag). Confirm
+    with the daemon team whether mid-session re-config is supported; if
+    not, ship the badge anyway and document the cosmetic-only path.
+24. **Resume / history picker for closed sessions.** `Ctrl+T` only lists
+    *live* sessions. Add a Resume tab to `widgets/modals/attach.py`
+    backed by `list_sessions(cwd=…, live=False)`; on submit issue
+    `blemeesd.open{resume:true, last_seen_seq:0}` to replay from disk.
+25. **Mid-session `:model` and `:effort`.** `:model` is documented in
+    `commands.py` as cosmetic-only; `:effort` doesn't exist. Either wire
+    them to a daemon re-config verb (preferred) or label them as UI
+    relabel + warn. Add Tab-complete pools: `sonnet`, `opus`, `haiku`,
+    `sonnet[1m]`, `opus[1m]`, `opusplan` for model; `low/medium/high/
+    xhigh/max` for effort.
+26. **Image paste in composer.** Spec §3 defers multimodal but Claude
+    Code-native users paste screenshots constantly. Catch `Ctrl+V` of
+    image data, write to `$XDG_CACHE_HOME/blemees-tui/pastes/`, insert
+    `[Image #N]` chip, send `agent.user` with multipart `content`. Stub
+    OK for v0.1.x; full drag-and-drop can wait.
+
+**Acceptance:** a Claude Code power user can drive blemees-tui for a day
+without missing `@`-completion, mode-cycling, model-switching, or
+resume-by-name. Image paste works for screenshots.
+
+---
+
+## M7 — Polish & long-tail (post-v0.1)
+
+Stretch goals from the parity audit; pick from the list as time allows.
+
+27. **Plan-mode banner** when `permission_mode=plan` is active (reuse
+    `_sync_banner` with a new state); `Ctrl+G` opens last assistant
+    message in `$EDITOR`.
+28. **`:cost` / `:usage` / `:context` overlay** rendering the data we
+    already compute (`Usage`, `cumulative_usage`, ctx tokens) plus a
+    by-category breakdown from `session_info_reply`.
+29. **Reverse history search (`Ctrl+R`)** across all sessions in the
+    current project, not just the active one.
+30. **`!`-prefix shell mode** in the composer (forward verbatim — let
+    Claude Code execute, don't reinvent local subprocess plumbing).
+31. **Auto-memory icon** in the transcript when `memory_write` /
+    `memory_read` tool calls fire (detect by name in the reducer).
+32. **Output-style** field in the new-session modal (`outputStyle` in
+    Claude options).
+33. **Hook-event filter chip** in the event log.
+34. **PR-status footer badge** behind a config flag (`gh pr status`
+    poll).
+35. **`/recap` overlay** with a one-liner summary of the last 3 turns
+    when the user returns after >3 min idle.
+36. **Keybindings TOML override** — spec §11 promises this; `app.BINDINGS`
+    is hardcoded today.
+37. **Statusline** support reading the user's `~/.claude/settings.json`
+    `statusLine` setting (avoid duplicate config).
+38. **`Ctrl+G` external-editor escape** for the composer.
+39. **Fix `Ctrl+T` collision** — Claude Code uses it for the task list,
+    we use it for Attach. Move Attach to `Ctrl+Shift+A` if/when we add
+    task-list rendering.
+40. **Sub-agent visual nesting** — indent sub-agent turns under their
+    parent tool call so the reader can tell which agent did what.
+41. **`argument-hint` in skill completion popup** — already parsed in
+    `discover.py`, just not displayed.
+
+---
+
+## Conscious non-goals
+
+The TUI deliberately does *not* implement these — different surface, or
+the user already configures them outside any session:
+
+- IDE / Web / Desktop / Slack / Telegram / Discord / iMessage /
+  Channels / GitHub Actions / Routines / Chrome / Dispatch.
+- `claude auth login`, `claude mcp`, plugin marketplace browser,
+  `/permissions` editor, hook/MCP/agent definition UIs — point users at
+  the upstream CLI's config flows.
+- `--worktree`, `--tmux`, `--teleport`, `--rc`, agent teams (multi-pane).
+- `-p` / `--print` / `--bare` headless — meaningless for an interactive
+  frontend.
+- `--fork-session`, `--from-pr`, `--init-only`, `--maintenance` — niche
+  CLI orchestration.
+
+---
+
 ## Risks worth tracking
 
 - **Streaming Markdown perf in Textual.** The `Markdown` widget rebuilds

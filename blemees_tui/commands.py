@@ -19,6 +19,8 @@ Supported commands:
   rebind the backend's cwd; that needs a fresh session).
 * ``:model <name>`` — relabel the active session's model in the UI.
 * ``:watch <session-id>`` — open a watch on the given UUID.
+* ``:select <N>`` — switch to session number N (1-indexed; for sessions
+  past Ctrl+0/10 where the digit shortcuts run out).
 * ``:help`` — open the help overlay.
 * ``:q`` / ``:quit`` — quit the app.
 
@@ -56,6 +58,7 @@ _KNOWN = {
     "cwd",
     "model",
     "watch",
+    "select",
     "help",
     "q",
     "quit",

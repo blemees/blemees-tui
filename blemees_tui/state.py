@@ -42,7 +42,10 @@ class ThinkingBlock:
 class ToolUseBlock:
     tool_use_id: str
     name: str
-    input: dict[str, Any]
+    # Backend-dependent — Claude's tools use objects, but Codex's
+    # ``exec_command_begin`` sends the argv as a list, and other tools may
+    # send a string. Renderer formats per-shape.
+    input: Any
     result_text: str | None = None  # populated by agent.tool_result
     is_error: bool = False
 
@@ -121,6 +124,18 @@ class SessionState:
     # Messages typed while the agent was busy. Flushed FIFO when
     # ``agent.result`` lands and ``turn_active`` flips back to False.
     pending_sends: list[str] = field(default_factory=list)
+    # Unsubmitted composer text, snapshotted on session-switch so each
+    # session keeps its own in-progress message.
+    draft: str = ""
+    # Highest ``seq`` we expect to see during replay, set from
+    # ``blemeesd.opened.last_seq`` / ``blemeesd.watching.last_seq``. While
+    # ``last_seen_seq < replay_target_seq`` the chat pane shows a loading
+    # overlay; cleared back to 0 once we catch up.
+    replay_target_seq: int = 0
+    # The seq we started replay from — needed to render a "X of Y"
+    # progress that doesn't look weird on warm reconnects (where we start
+    # 95% of the way through).
+    replay_start_seq: int = 0
 
 
 # ---------------------------------------------------------------------------

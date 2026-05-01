@@ -18,8 +18,8 @@ _KEY_TABLE = """\
   Ctrl+E            Event log overlay
   Ctrl+D            Debug pane (raw frames)
   Ctrl+S            Save transcript
-  1..9              Switch to session N
-  Ctrl+Tab          Next session
+  Ctrl+1..9, Ctrl+0 Switch to session N (Ctrl+0 = 10)
+  Ctrl+Tab          Next session (cycles past 10)
   t                 Toggle thinking visibility
   Tab               Activate the composer (Esc to deactivate)
   :                 Focus composer + open command line
@@ -30,7 +30,8 @@ _KEY_TABLE = """\
   q                 Quit
 
 [b]TUI commands (vim-style ``:``)[/b]
-  :new :close :delete :interrupt :rename :cwd :model :watch :help :q
+  :new :close :delete :interrupt :rename :cwd :model :watch :select :help :q
+  ``:select N`` jumps to session N (any number — for past Ctrl+0/10).
   These are intercepted by the TUI.
 
 [b]Backend slash commands (``/``)[/b]

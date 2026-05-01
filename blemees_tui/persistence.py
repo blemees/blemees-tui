@@ -2,12 +2,16 @@
 
 Files kept under ``$XDG_STATE_HOME/blemees-tui/``:
 
-* ``sessions.json``   — live + watching sessions, rewritten on every change.
+* ``sessions.json``   — live + watching sessions index, rewritten on every change.
 * ``history.json``    — bounded ring (200 entries) of closed-but-remembered
                         sessions.
+* ``snapshots/``      — full per-session in-memory state cached to disk
+                        (turn list, blocks, usage, drafts) so a TUI restart
+                        skips the full daemon replay.
 * ``blemees-tui.log`` — rotating log (weekly, 7 keep). Configured by the
                         connection layer; this module hands back the path.
-* ``transcripts/``    — ``Ctrl+S`` exports.
+* ``transcripts/``    — ``Ctrl+S`` Markdown exports (different from the
+                        snapshots cache above — those are JSON state).
 
 JSON writes are atomic: write to ``<file>.tmp``, ``fsync``, ``rename``.
 """
@@ -24,6 +28,7 @@ from pathlib import Path
 from typing import Any
 
 SESSIONS_SCHEMA_VERSION = 1
+SNAPSHOT_SCHEMA_VERSION = 1
 HISTORY_MAX_ENTRIES = 200
 
 
@@ -51,6 +56,14 @@ def log_path() -> Path:
 
 def transcripts_dir() -> Path:
     return state_dir() / "transcripts"
+
+
+def snapshots_dir() -> Path:
+    return state_dir() / "snapshots"
+
+
+def snapshot_path(session_id: str) -> Path:
+    return snapshots_dir() / f"{session_id}.json"
 
 
 def ensure_state_dir() -> Path:

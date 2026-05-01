@@ -373,6 +373,10 @@ class Connection:
                 raise FatalProtocolError(ack.get("message", "protocol mismatch"))
             raise ConnectionError_(f"unexpected hello ack: {ack!r}")
         self.daemon_info = ack
+        # Forward the hello_ack to the app handler too — it lives outside the
+        # reader loop because we read it inline above, but the app needs it
+        # to populate state.daemon (footer, new-session backend list, …).
+        await self._dispatch(ack)
         self._reader_task = asyncio.create_task(self._reader_loop(), name="blemees-reader")
         self._ping_task = asyncio.create_task(self._ping_loop(), name="blemees-ping")
         self._last_inbound_at = time.monotonic()

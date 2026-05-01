@@ -10,7 +10,13 @@ from ..state import AppState
 
 class FooterStatusWidget(Static):
     DEFAULT_CSS = """
-    FooterStatusWidget { dock: bottom; height: 1; padding: 0 1; }
+    FooterStatusWidget {
+        dock: bottom;
+        height: 1;
+        padding: 0 1;
+        background: $panel;
+        color: $text-muted;
+    }
     """
 
     class ErrorChipClicked(Message):
@@ -28,15 +34,17 @@ class FooterStatusWidget(Static):
 
     def update_status(self) -> None:
         s = self._state
+        # Bright variants render distinctly on the coloured footer bg —
+        # the regular ANSI green/yellow/red wash out against $primary.
         dot = {
-            "connected": "[green]●[/]",
-            "reconnecting": "[yellow]●[/]",
-            "disconnected": "[red]●[/]",
-            "fatal": "[red]✗[/]",
+            "connected": "[bold bright_green]●[/]",
+            "reconnecting": "[bold bright_yellow]●[/]",
+            "disconnected": "[bold bright_red]●[/]",
+            "fatal": "[bold bright_red]✗[/]",
         }.get(s.connection_status, "·")
         backends = " ".join(f"{k} {v}" for k, v in (s.daemon.backends or {}).items())
-        turns = sum(len(sess.turns) for sess in s.sessions.values())
         active = s.sessions.get(s.active_session_id) if s.active_session_id else None
+        turns = len(active.turns) if active else 0
         ctx = ""
         if active and active.context_window:
             ctx = f" · ctx {active.context_tokens // 1000}k/{active.context_window // 1000}k"

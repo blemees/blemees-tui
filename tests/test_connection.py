@@ -86,6 +86,12 @@ async def test_handshake_populates_daemon_info(fake_daemon):
             await asyncio.sleep(0.02)
         assert conn.daemon_info.get("backends", {}).get("claude") == "2.1"
         assert any(f.get("type") == "blemeesd.hello" for f in received)
+        # Regression: the hello_ack must also reach on_frame so the app can
+        # populate state.daemon (the footer otherwise renders "daemon ?" /
+        # "no backends" even after the green-dot connect).
+        ack_frames = [f for f in received_frames if f.get("type") == "blemeesd.hello_ack"]
+        assert ack_frames, "hello_ack was not forwarded to on_frame"
+        assert ack_frames[0].get("backends", {}).get("claude") == "2.1"
     finally:
         await conn.stop()
 

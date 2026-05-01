@@ -44,6 +44,12 @@ def apply(state: SessionState, frame: dict[str, Any]) -> SessionState:
     handler = _HANDLERS.get(ftype)
     if handler is not None:
         handler(state, frame)
+
+    # Clear the replay window once we've caught up to the daemon's
+    # high-water mark so the chat pane drops the loading overlay.
+    if state.replay_target_seq and state.last_seen_seq >= state.replay_target_seq:
+        state.replay_target_seq = 0
+        state.replay_start_seq = 0
     return state
 
 
@@ -104,43 +110,133 @@ def _on_delta(state: SessionState, frame: dict[str, Any]) -> None:
     if not text:
         return
     turn = _ensure_active_turn(state)
+    # Only extend the *last* block when it's still the open block of the
+    # right kind. Searching the whole turn (the prior approach) routed
+    # text-after-a-tool deltas back into the *previous* text block, which
+    # then got squashed when ``agent.message`` reconciled.
     if kind == "thinking":
-        block = _last_block_of_type(turn, ThinkingBlock)
-        if block is None or block.finalized:
-            block = ThinkingBlock()
-            turn.blocks.append(block)
-        block.text += text
+        last = turn.blocks[-1] if turn.blocks else None
+        if isinstance(last, ThinkingBlock) and not last.finalized:
+            last.text += text
+        else:
+            turn.blocks.append(ThinkingBlock(text=text))
     elif kind == "text":
-        block = _last_block_of_type(turn, TextBlock)
-        if block is None or block.finalized:
-            block = TextBlock()
-            turn.blocks.append(block)
-        block.text += text
+        last = turn.blocks[-1] if turn.blocks else None
+        if isinstance(last, TextBlock) and not last.finalized:
+            last.text += text
+        else:
+            turn.blocks.append(TextBlock(text=text))
     # tool_input deltas are ignored at v0.1 — agent.tool_use carries the
     # final input dict and the daemon resolves partial_json before emitting.
 
 
 def _on_message(state: SessionState, frame: dict[str, Any]) -> None:
-    """Replace the in-progress text/thinking blocks with canonical content."""
-    content = frame.get("content") or []
-    turn = _ensure_active_turn(state)
-    # The daemon may emit multiple agent.message frames per turn (one per
-    # streamed message). We finalise whatever text/thinking blocks are
-    # currently open; tool_use blocks stay where they are.
-    for block in turn.blocks:
-        if isinstance(block, (TextBlock, ThinkingBlock)) and not block.finalized:
-            block.finalized = True
+    """Reconcile the turn's blocks with this message's canonical content,
+    preserving inline order between text and tool_use items.
 
-    canonical_text = _join_text_blocks(content)
-    if canonical_text:
-        # Find the most recent open text block and overwrite — handles cases
-        # where deltas accumulated out of order.
-        text_blocks = [b for b in turn.blocks if isinstance(b, TextBlock)]
-        if text_blocks:
-            text_blocks[-1].text = canonical_text
-            text_blocks[-1].finalized = True
-        else:
-            turn.blocks.append(TextBlock(text=canonical_text, finalized=True))
+    The wire shape (Anthropic-style content array) is e.g.::
+
+        [
+            {"type": "text", "text": "Reading the file."},
+            {"type": "tool_use", "id": "tu1", "name": "Read", "input": {...}},
+            {"type": "text", "text": "Now editing."},
+        ]
+
+    A turn typically receives several ``agent.message`` frames — one per
+    assistant message in a multi-step interaction (text → tool_use →
+    tool_result → text → tool_use → …). Each new message therefore
+    *appends* to the turn rather than replacing previously finalised
+    blocks. The previous implementation collapsed all text into a single
+    block at position 0 and bunched tool_use blocks at the tail, which
+    is what produced the "all text on top, all tools below" rendering
+    bug.
+
+    Streaming-delta interaction: ``agent.delta`` may have already created
+    open (not-yet-finalised) text/thinking blocks. The first text item in
+    this message finalises that open block; later text items in the same
+    message become fresh appended blocks. Tool_use blocks are deduped
+    against any already-present blocks by ``tool_use_id`` (preserves
+    ``result_text`` from a prior ``agent.tool_result``).
+    """
+    content = frame.get("content")
+    if not isinstance(content, list):
+        return
+    turn = _ensure_active_turn(state)
+
+    existing_tools_by_id: dict[str, ToolUseBlock] = {
+        b.tool_use_id: b for b in turn.blocks if isinstance(b, ToolUseBlock)
+    }
+
+    # The most recent NOT-yet-finalised text/thinking blocks belong to
+    # this message — the streaming buffer the deltas were filling in.
+    open_text = next(
+        (
+            b
+            for b in reversed(turn.blocks)
+            if isinstance(b, TextBlock) and not b.finalized
+        ),
+        None,
+    )
+    open_thinking = next(
+        (
+            b
+            for b in reversed(turn.blocks)
+            if isinstance(b, ThinkingBlock) and not b.finalized
+        ),
+        None,
+    )
+
+    for item in content:
+        if not isinstance(item, dict):
+            continue
+        item_type = item.get("type")
+
+        if item_type == "text":
+            text = str(item.get("text", "") or "")
+            if open_text is not None:
+                open_text.text = text
+                open_text.finalized = True
+                open_text = None  # only the first text item consumes it
+            else:
+                turn.blocks.append(TextBlock(text=text, finalized=True))
+
+        elif item_type == "thinking":
+            text = str(item.get("thinking") or item.get("text", "") or "")
+            if open_thinking is not None:
+                open_thinking.text = text
+                open_thinking.finalized = True
+                open_thinking = None
+            else:
+                turn.blocks.append(ThinkingBlock(text=text, finalized=True))
+
+        elif item_type == "tool_use":
+            tool_use_id = item.get("id") or item.get("tool_use_id")
+            if not isinstance(tool_use_id, str) or not tool_use_id:
+                continue
+            name = str(item.get("name", "") or "")
+            input_payload = item.get("input")
+            if tool_use_id in existing_tools_by_id:
+                existing = existing_tools_by_id[tool_use_id]
+                if name:
+                    existing.name = name
+                if input_payload is not None:
+                    existing.input = input_payload
+            else:
+                new_block = ToolUseBlock(
+                    tool_use_id=tool_use_id,
+                    name=name,
+                    input=input_payload,
+                )
+                turn.blocks.append(new_block)
+                existing_tools_by_id[tool_use_id] = new_block
+
+    # Any open text/thinking block that this message didn't carry text
+    # for still needs to be marked finalised so subsequent deltas open a
+    # fresh block instead of appending into a stale buffer.
+    if open_text is not None:
+        open_text.finalized = True
+    if open_thinking is not None:
+        open_thinking.finalized = True
 
 
 def _on_tool_use(state: SessionState, frame: dict[str, Any]) -> None:
@@ -148,11 +244,14 @@ def _on_tool_use(state: SessionState, frame: dict[str, Any]) -> None:
     if not tool_use_id:
         return
     turn = _ensure_active_turn(state)
+    # Preserve the input shape verbatim — the renderer adapts per-type.
+    # Codex's exec_command sends a list (argv); Claude's tools send objects;
+    # some backends send strings. Coercing to dict() crashes on lists.
     turn.blocks.append(
         ToolUseBlock(
             tool_use_id=tool_use_id,
             name=str(frame.get("name", "")),
-            input=dict(frame.get("input") or {}),
+            input=frame.get("input"),
         )
     )
 
@@ -264,6 +363,23 @@ def _on_session_info_reply(state: SessionState, frame: dict[str, Any]) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _on_open_or_watch_ack(state: SessionState, frame: dict[str, Any]) -> None:
+    """``blemeesd.opened`` / ``blemeesd.watching`` carry ``last_seq`` — the
+    daemon's current high-water mark. If we're behind, start a replay
+    progress window so the UI can render a loading overlay until we catch
+    up. Brand-new sessions report ``last_seq:0`` (or absent) and skip.
+    """
+    last_seq = frame.get("last_seq")
+    if not isinstance(last_seq, int) or last_seq <= state.last_seen_seq:
+        # Caught up or nothing to replay — make sure we're not stuck in a
+        # stale loading state from a prior reconnect.
+        state.replay_target_seq = 0
+        state.replay_start_seq = 0
+        return
+    state.replay_target_seq = last_seq
+    state.replay_start_seq = state.last_seen_seq
+
+
 _HANDLERS = {
     "agent.system_init": _on_system_init,
     "agent.user": _on_user,
@@ -274,6 +390,8 @@ _HANDLERS = {
     "agent.tool_result": _on_tool_result,
     "agent.notice": _on_notice,
     "agent.result": _on_result,
+    "blemeesd.opened": _on_open_or_watch_ack,
+    "blemeesd.watching": _on_open_or_watch_ack,
     "blemeesd.session_taken": _on_session_taken,
     "blemeesd.session_closed": _on_session_closed,
     "blemeesd.replay_gap": _on_replay_gap,

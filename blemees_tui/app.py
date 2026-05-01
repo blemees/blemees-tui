@@ -17,6 +17,7 @@ from typing import Any
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
+from textual.widgets import Static
 
 from . import __version__
 from .commands import is_uuid as is_command_uuid, parse as parse_command
@@ -32,6 +33,7 @@ from .persistence import (
     save_sessions,
 )
 from .reducer import apply as reduce_frame
+from .snapshot import delete_snapshot, load_snapshot, save_snapshot
 from .state import (
     AppState,
     DaemonInfo,
@@ -62,10 +64,22 @@ class BlemeesTuiApp(App):
 
     CSS = """
     #stack { height: 1fr; width: 100%; }
+    #chat-header {
+        height: 1;
+        width: 100%;
+        background: $accent;
+        color: auto;
+        /* Left padding = sidebar width (28) + the chat pane's own
+           horizontal padding (2), so the text lines up over the chat
+           transcript rather than the sidebar. */
+        padding: 0 2 0 30;
+    }
     #main { height: 1fr; width: 100%; }
     #main > #sidebar { width: 28; height: 100%; }
-    #main > #chat { width: 1fr; height: 100%; }
-    #composer { width: 100%; height: auto; }
+    #main > #chat-column { width: 1fr; height: 100%; }
+    #chat-column > #chat { width: 100%; height: 1fr; }
+    #chat-column > #completion { width: 100%; height: auto; }
+    #chat-column > #composer { width: 100%; height: auto; }
     """
 
     BINDINGS = [
@@ -80,7 +94,13 @@ class BlemeesTuiApp(App):
         Binding("ctrl+s", "save_transcript", "Save transcript"),
         Binding("ctrl+tab", "next_session", "Next session", show=False),
         Binding("ctrl+shift+tab", "prev_session", "Prev session", show=False),
-        *[Binding(str(i), f"select_session({i})", f"Session {i}", show=False) for i in range(1, 10)],
+        # Ctrl+1..Ctrl+9 → sessions 1-9; Ctrl+0 → session 10. Past that,
+        # Ctrl+Tab cycles. Bare digits are left for the composer.
+        *[
+            Binding(f"ctrl+{i}", f"select_session({i})", f"Session {i}", show=False)
+            for i in range(1, 10)
+        ],
+        Binding("ctrl+0", "select_session(10)", "Session 10", show=False),
         Binding("t", "toggle_thinking", "Toggle thinking", show=False),
         Binding("colon", "focus_composer_command", "Command", show=False),
         # Chat scroll — priority so they fire even when the composer's
@@ -120,6 +140,10 @@ class BlemeesTuiApp(App):
         self._debug_frames: deque[tuple[str, dict[str, Any]]] = deque(maxlen=DebugPane.CAPACITY)
         self._socket_override = socket_override
         self._show_thinking: bool = self.config_obj.ui.show_thinking
+        # Set when a frame-driven UI refresh is already pending — coalesces
+        # bursts of frames (replay, fast streaming) into one render per
+        # Textual tick instead of N renders.
+        self._refresh_pending: bool = False
 
     # ------------------------------------------------------------------
     # Compose / mount
@@ -128,13 +152,19 @@ class BlemeesTuiApp(App):
     def compose(self) -> ComposeResult:
         yield ConnectionBanner(id="conn-banner")
         with Vertical(id="stack"):
-            yield Horizontal(
-                SidebarWidget(self.state, id="sidebar"),
-                ChatPaneWidget(id="chat"),
-                id="main",
-            )
-            yield CompletionPopup(id="completion")
-            yield ComposerWidget(id="composer")
+            # Full-width session header — text padded to start above the
+            # chat pane (past the sidebar). Lives here, not in ChatPaneWidget,
+            # so the colored bar reaches the left edge of the screen.
+            yield Static("", id="chat-header")
+            with Horizontal(id="main"):
+                yield SidebarWidget(self.state, id="sidebar")
+                # Right column: chat + completion popup + composer stack
+                # so the input lines up under the chat pane only, not under
+                # the sidebar.
+                with Vertical(id="chat-column"):
+                    yield ChatPaneWidget(id="chat")
+                    yield CompletionPopup(id="completion")
+                    yield ComposerWidget(id="composer")
         yield FooterStatusWidget(self.state, id="footer")
 
     async def on_mount(self) -> None:
@@ -151,43 +181,62 @@ class BlemeesTuiApp(App):
                 )
             )
 
-        # Restore tracked sessions from disk before starting the connection
-        # so the supervisor reissues `open … resume:true` for them.
+        # Restore each known session from disk. Prefer the full snapshot
+        # (turn list, blocks, usage, …) so the chat pane can paint
+        # immediately on activation; fall back to the metadata-only row
+        # from sessions.json if the snapshot is missing/corrupt.
         for stored in load_sessions():
-            sess = SessionState(
-                session_id=stored.session_id,
-                backend=stored.backend,
-                model=stored.model,
-                cwd=stored.cwd,
-                title=stored.title,
-                options=stored.options,
-                last_seen_seq=stored.last_seen_seq,
-                last_active_at_ms=stored.last_active_at_ms,
-                mode=SessionMode(stored.mode) if stored.mode else SessionMode.OWNED,
-            )
-            self.state.sessions[sess.session_id] = sess
+            cached = load_snapshot(stored.session_id)
+            if cached is not None:
+                # The disk last_seen_seq is authoritative (the snapshot was
+                # taken after we processed those frames). The metadata row
+                # may be a tick behind if the TUI crashed between agent.result
+                # and the metadata flush — keep the higher of the two.
+                cached.last_seen_seq = max(cached.last_seen_seq, stored.last_seen_seq)
+                cached.last_active_at_ms = max(
+                    cached.last_active_at_ms, stored.last_active_at_ms
+                )
+                self.state.sessions[cached.session_id] = cached
+            else:
+                self.state.sessions[stored.session_id] = SessionState(
+                    session_id=stored.session_id,
+                    backend=stored.backend,
+                    model=stored.model,
+                    cwd=stored.cwd,
+                    title=stored.title,
+                    options=stored.options,
+                    last_seen_seq=stored.last_seen_seq,
+                    last_active_at_ms=stored.last_active_at_ms,
+                    mode=SessionMode(stored.mode) if stored.mode else SessionMode.OWNED,
+                )
 
         self._connection = Connection(
             socket_path=self.config_obj.connection.socket or self._socket_override or None,
             on_frame=self._handle_frame,
             on_status_change=self._on_connection_status,
         )
-        # Re-track each restored session so the supervisor will resume it.
-        # First attach uses last_seen_seq=0 so the daemon replays the full
-        # event log and the reducer rebuilds in-memory turns from scratch.
-        # Subsequent reconnects within this TUI run use the up-to-date
-        # last_seen_seq carried on _tracked (Connection.update_last_seen
-        # bumps it as frames arrive), so we don't pay the full-replay cost
-        # again unless the user restarts the TUI.
+
+        # Eagerly track every restored session so the supervisor reissues
+        # ``open … resume:true, last_seen_seq:<stored>`` (or ``watch``) on
+        # connect. We keep eager attach because a session may be actively
+        # working in the daemon — without attaching we'd never see its
+        # frames, the sidebar wouldn't reflect ``turn_active``, and pending
+        # errors would pile up unseen. The snapshot we just loaded already
+        # makes this cheap: ``last_seen_seq`` is the high-water mark from
+        # the previous run, so the daemon only replays frames since then
+        # (typically zero — a no-op replay — or a small delta if the
+        # daemon kept running while the TUI was shut down).
         for sess in self.state.sessions.values():
             if sess.mode == SessionMode.WATCHING:
-                self._connection.track_watch(sess.session_id, last_seen_seq=0)
+                self._connection.track_watch(
+                    sess.session_id, last_seen_seq=sess.last_seen_seq
+                )
             else:
                 self._connection.track_owned(
                     sess.session_id,
                     backend=sess.backend,
                     options=sess.options,
-                    last_seen_seq=0,
+                    last_seen_seq=sess.last_seen_seq,
                 )
 
         await self._connection.start()
@@ -196,6 +245,11 @@ class BlemeesTuiApp(App):
     async def on_unmount(self) -> None:
         if self._connection is not None:
             await self._connection.stop()
+        # Final snapshot for every still-live session so the next launch
+        # opens with the current transcript instead of an older agent.result
+        # boundary.
+        for sess in self.state.sessions.values():
+            save_snapshot(sess)
         self._persist_sessions()
 
     # ------------------------------------------------------------------
@@ -239,6 +293,9 @@ class BlemeesTuiApp(App):
                     # Refresh context_tokens / cumulative usage for the footer
                     # — fire-and-forget; reply handled via the reducer.
                     self._schedule_session_info(sid)
+                    # Snapshot the freshly-completed turn so a TUI restart
+                    # can paint it from disk without daemon replay.
+                    save_snapshot(sess)
                     if sess is not None and sess.pending_sends:
                         # Flush any locally-queued user messages.
                         asyncio.create_task(self._flush_pending_sends(sid))
@@ -246,18 +303,20 @@ class BlemeesTuiApp(App):
                     self._archive_to_history(sess, reason=str(frame.get("reason", "owner_closed")))
                     self._connection and self._connection.untrack(sid)
                     self.state.sessions.pop(sid, None)
+                    delete_snapshot(sid)
                     if self.state.active_session_id == sid:
-                        self.state.active_session_id = None
+                        self._set_active_session(None)
                     self._persist_sessions()
                 if ftype == "blemeesd.error" and frame.get("code") == "session_unknown":
                     self._archive_to_history(sess, reason="session_unknown")
                     self._connection and self._connection.untrack(sid)
                     self.state.sessions.pop(sid, None)
+                    delete_snapshot(sid)
                     if self.state.active_session_id == sid:
-                        self.state.active_session_id = None
+                        self._set_active_session(None)
                     self._persist_sessions()
 
-        self._refresh_ui()
+        self._request_refresh()
 
     def _on_notice(self, session_id: str, frame: dict[str, Any]) -> None:
         category = str(frame.get("category", ""))
@@ -330,8 +389,22 @@ class BlemeesTuiApp(App):
     # UI refresh
     # ------------------------------------------------------------------
 
+    def _request_refresh(self) -> None:
+        """Coalesce frame-driven UI refreshes — schedule at most one
+        ``_refresh_ui`` per Textual tick. A burst of replay frames in a
+        single tick batches into one render instead of N."""
+        if self._refresh_pending:
+            return
+        self._refresh_pending = True
+        self.call_after_refresh(self._flush_refresh)
+
+    def _flush_refresh(self) -> None:
+        self._refresh_pending = False
+        self._refresh_ui()
+
     def _refresh_ui(self) -> None:
         self._refresh_footer()
+        self._refresh_header()
         active = (
             self.state.sessions.get(self.state.active_session_id)
             if self.state.active_session_id
@@ -370,6 +443,65 @@ class BlemeesTuiApp(App):
             footer.update_status()
         except Exception:
             pass
+
+    def _set_active_session(self, sid: str | None) -> None:
+        """Single point for active-session changes.
+
+        Snapshots the composer's current text into the previous session's
+        ``draft`` (so unsubmitted text travels with the session, not the
+        composer), then loads the new session's draft into the composer.
+        Closed sessions — those already removed from ``state.sessions`` by
+        the time we get here — don't get their draft saved.
+        """
+        prev_sid = self.state.active_session_id
+        composer: ComposerWidget | None
+        try:
+            composer = self.query_one("#composer", ComposerWidget)
+        except Exception:
+            composer = None
+
+        if composer is not None and prev_sid is not None and prev_sid != sid:
+            prev = self.state.sessions.get(prev_sid)
+            if prev is not None:
+                try:
+                    ta = composer.query_one("#composer-input")
+                    prev.draft = ta.text
+                except Exception:
+                    pass
+
+        self.state.active_session_id = sid
+
+        if composer is not None:
+            new_sess = self.state.sessions.get(sid) if sid else None
+            composer.set_text(new_sess.draft if new_sess is not None else "", focus=False)
+
+    def _refresh_header(self) -> None:
+        try:
+            header = self.query_one("#chat-header", Static)
+        except Exception:
+            return
+        active = (
+            self.state.sessions.get(self.state.active_session_id)
+            if self.state.active_session_id
+            else None
+        )
+        if active is None:
+            header.update("[dim]No session[/]")
+            return
+        title = active.title or active.session_id[:8]
+        right_bits: list[str] = []
+        if active.backend:
+            backend = active.backend
+            if active.model:
+                backend += f"/{active.model}"
+            right_bits.append(backend)
+        if active.cwd:
+            right_bits.append(active.cwd)
+        right = " · ".join(right_bits)
+        text = f"[b]{_escape_markup(title)}[/]"
+        if right:
+            text += f"  · {_escape_markup(right)}"
+        header.update(text)
 
     # ------------------------------------------------------------------
     # Persistence
@@ -501,7 +633,7 @@ class BlemeesTuiApp(App):
     def action_select_session(self, index: int) -> None:
         ids = list(self.state.sessions.keys())
         if 1 <= index <= len(ids):
-            self.state.active_session_id = ids[index - 1]
+            self._set_active_session(ids[index - 1])
             self._refresh_ui()
 
     def _cycle_session(self, step: int) -> None:
@@ -510,9 +642,9 @@ class BlemeesTuiApp(App):
             return
         if self.state.active_session_id in ids:
             i = ids.index(self.state.active_session_id)
-            self.state.active_session_id = ids[(i + step) % len(ids)]
+            self._set_active_session(ids[(i + step) % len(ids)])
         else:
-            self.state.active_session_id = ids[0]
+            self._set_active_session(ids[0])
         self._refresh_ui()
 
     def action_event_log(self) -> None:
@@ -574,7 +706,8 @@ class BlemeesTuiApp(App):
                     sess, reason="deleted" if delete else "user_closed"
                 )
             self.state.sessions.pop(sid, None)
-            self.state.active_session_id = None
+            delete_snapshot(sid)
+            self._set_active_session(None)
             self._persist_sessions()
             self._refresh_ui()
 
@@ -634,7 +767,7 @@ class BlemeesTuiApp(App):
             mode=SessionMode.OWNED,
         )
         self.state.sessions[sid] = sess
-        self.state.active_session_id = sid
+        self._set_active_session(sid)
         self._connection.track_owned(sid, backend=backend, options=options)
         try:
             await self._connection.open_session(sid, backend=backend, options=options)
@@ -644,7 +777,7 @@ class BlemeesTuiApp(App):
             )
             self.state.sessions.pop(sid, None)
             self._connection.untrack(sid)
-            self.state.active_session_id = None
+            self._set_active_session(None)
             self._persist_sessions()
             self._refresh_ui()
             return
@@ -674,10 +807,11 @@ class BlemeesTuiApp(App):
         finally:
             self._connection.untrack(sid)
             sess = self.state.sessions.pop(sid, None)
+            delete_snapshot(sid)
             if sess and self.config_obj.ui.history_on_unwatch:
                 self._archive_to_history(sess, reason="user_closed")
             if self.state.active_session_id == sid:
-                self.state.active_session_id = None
+                self._set_active_session(None)
             self._persist_sessions()
             self._refresh_ui()
 
@@ -686,6 +820,7 @@ class BlemeesTuiApp(App):
     ) -> None:
         sid = msg.session_id
         sess = self.state.sessions.pop(sid, None)
+        delete_snapshot(sid)
         if sess is not None:
             reason = sess.closed_reason or (
                 "session_taken" if sess.mode == SessionMode.DETACHED else "user_closed"
@@ -694,7 +829,7 @@ class BlemeesTuiApp(App):
         if self._connection is not None:
             self._connection.untrack(sid)
         if self.state.active_session_id == sid:
-            self.state.active_session_id = None
+            self._set_active_session(None)
         self._persist_sessions()
         self._refresh_ui()
 
@@ -735,7 +870,7 @@ class BlemeesTuiApp(App):
         sid = msg.session_id
         sess = SessionState(session_id=sid, mode=SessionMode.WATCHING)
         self.state.sessions[sid] = sess
-        self.state.active_session_id = sid
+        self._set_active_session(sid)
         self._connection.track_watch(sid)
         try:
             await self._connection.watch_session(sid, last_seen_seq=0)
@@ -842,12 +977,24 @@ class BlemeesTuiApp(App):
         elif cmd.name == "model" and sess is not None:
             sess.model = cmd.arg.strip()
             self._refresh_ui()
+        elif cmd.name == "select":
+            arg = cmd.arg.strip()
+            try:
+                index = int(arg)
+            except ValueError:
+                self.state.event_log.append(
+                    EventLogSource.TUI_INTERNAL,
+                    "command",
+                    f":select needs a number, got: {arg!r}",
+                )
+                return
+            self.action_select_session(index)
         elif cmd.name == "watch":
             target = cmd.arg.strip()
             if is_command_uuid(target) and self._connection is not None:
                 ws = SessionState(session_id=target, mode=SessionMode.WATCHING)
                 self.state.sessions[target] = ws
-                self.state.active_session_id = target
+                self._set_active_session(target)
                 self._connection.track_watch(target)
                 try:
                     await self._connection.watch_session(target, last_seen_seq=0)
@@ -865,6 +1012,12 @@ class BlemeesTuiApp(App):
                     "command",
                     f":watch needs a UUID, got: {target!r}",
                 )
+
+
+def _escape_markup(text: str) -> str:
+    """Escape Rich markup characters so user-controlled strings (titles,
+    cwd, model names) can't inject tags into the header."""
+    return text.replace("[", r"\[")
 
 
 # Convenience for ``python -c "from blemees_tui.app import run; run()"``.

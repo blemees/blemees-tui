@@ -104,6 +104,244 @@ def test_tool_use_then_tool_result_pairing():
     assert not block.is_error
 
 
+def test_open_ack_sets_replay_target_and_apply_clears_when_caught_up():
+    """``blemeesd.opened`` carrying ``last_seq > last_seen_seq`` opens a
+    replay window. The window stays open while subsequent frames advance
+    ``last_seen_seq`` toward the target, and clears once we reach it."""
+    s = _new()
+    s.last_seen_seq = 0  # cold-start
+    apply(s, {"type": "blemeesd.opened", "session_id": "s1", "last_seq": 100})
+    assert s.replay_target_seq == 100
+    assert s.replay_start_seq == 0
+
+    # Replay frames stream in — window stays open.
+    apply(s, {"type": "agent.delta", "session_id": "s1", "seq": 50, "kind": "text", "text": "x"})
+    assert s.replay_target_seq == 100  # still mid-replay
+
+    # Final replay frame catches us up — window auto-clears.
+    apply(s, {"type": "agent.delta", "session_id": "s1", "seq": 100, "kind": "text", "text": "y"})
+    assert s.replay_target_seq == 0
+
+
+def test_open_ack_with_no_replay_does_not_set_target():
+    """Brand-new sessions report ``last_seq == 0`` (or absent). The reducer
+    must not open a phantom replay window."""
+    s = _new()
+    apply(s, {"type": "blemeesd.opened", "session_id": "s1", "last_seq": 0})
+    assert s.replay_target_seq == 0
+
+
+def test_streaming_text_after_tool_starts_new_block():
+    """Text deltas that arrive *after* a tool_use block must not get
+    appended back into the previous (now-stale) text block. The previous
+    reducer searched the whole turn for the most recent text block of any
+    age, so post-tool streamed text accumulated into the pre-tool block,
+    and the subsequent ``agent.message`` reconcile then overwrote that
+    bloated block with just its current segment — silently dropping the
+    interim message between tool calls.
+    """
+    s = _new()
+    apply(s, {"type": "agent.user", "session_id": "s1", "seq": 1, "message": {"role": "user", "content": "go"}})
+    # Pre-tool text streams in.
+    apply(s, {"type": "agent.delta", "session_id": "s1", "seq": 2, "kind": "text", "text": "Reading."})
+    # Tool fires (stand-alone frame, as with --include-partial-messages).
+    apply(
+        s,
+        {
+            "type": "agent.tool_use",
+            "session_id": "s1",
+            "seq": 3,
+            "tool_use_id": "tu1",
+            "name": "Read",
+            "input": {"path": "/x"},
+        },
+    )
+    # Post-tool text streams in — must land in a *new* text block.
+    apply(s, {"type": "agent.delta", "session_id": "s1", "seq": 4, "kind": "text", "text": "Now editing."})
+
+    blocks = s.turns[-1].blocks
+    shapes = [type(b).__name__ for b in blocks]
+    assert shapes == ["TextBlock", "ToolUseBlock", "TextBlock"], shapes
+    assert blocks[0].text == "Reading."  # type: ignore[attr-defined]
+    assert blocks[2].text == "Now editing."  # type: ignore[attr-defined]
+
+
+def test_multi_message_turn_preserves_inline_text_tool_order():
+    """A multi-step assistant turn (text → tool → text → tool → text)
+    arrives as several ``agent.message`` frames. Each message must append
+    its content rather than overwrite the previous text block, and each
+    tool_use must land at its inline position in the content array
+    rather than getting shoved to the tail. The previous reducer
+    collapsed all text into block 0 and clustered tools at the bottom.
+    """
+    s = _new()
+    apply(s, {"type": "agent.user", "session_id": "s1", "seq": 1, "message": {"role": "user", "content": "do it"}})
+
+    apply(
+        s,
+        {
+            "type": "agent.message",
+            "session_id": "s1",
+            "seq": 2,
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "Reading the file."},
+                {
+                    "type": "tool_use",
+                    "id": "tu_read",
+                    "name": "Read",
+                    "input": {"path": "/x"},
+                },
+            ],
+        },
+    )
+    apply(s, {"type": "agent.tool_result", "session_id": "s1", "seq": 3, "tool_use_id": "tu_read", "output": "..."})
+
+    apply(
+        s,
+        {
+            "type": "agent.message",
+            "session_id": "s1",
+            "seq": 4,
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "Now editing."},
+                {
+                    "type": "tool_use",
+                    "id": "tu_edit",
+                    "name": "Edit",
+                    "input": {"path": "/x", "old_string": "a", "new_string": "b"},
+                },
+            ],
+        },
+    )
+    apply(s, {"type": "agent.tool_result", "session_id": "s1", "seq": 5, "tool_use_id": "tu_edit", "output": "ok"})
+
+    apply(
+        s,
+        {
+            "type": "agent.message",
+            "session_id": "s1",
+            "seq": 6,
+            "role": "assistant",
+            "content": [{"type": "text", "text": "Done."}],
+        },
+    )
+
+    blocks = s.turns[-1].blocks
+    # Expected inline order: text, tool, text, tool, text — five blocks total.
+    shapes = [type(b).__name__ for b in blocks]
+    assert shapes == [
+        "TextBlock",
+        "ToolUseBlock",
+        "TextBlock",
+        "ToolUseBlock",
+        "TextBlock",
+    ], shapes
+    assert blocks[0].text == "Reading the file."  # type: ignore[attr-defined]
+    assert blocks[1].name == "Read"  # type: ignore[attr-defined]
+    assert blocks[2].text == "Now editing."  # type: ignore[attr-defined]
+    assert blocks[3].name == "Edit"  # type: ignore[attr-defined]
+    assert blocks[4].text == "Done."  # type: ignore[attr-defined]
+
+
+def test_tool_use_inside_agent_message_content_is_extracted():
+    """Claude Code suppresses ``stream_event{content_block_*}`` by default,
+    so tool calls arrive only embedded in ``agent.message.content`` — not
+    as standalone ``agent.tool_use`` frames. The reducer must extract them
+    or tool calls never appear in the transcript.
+    """
+    s = _new()
+    apply(s, {"type": "agent.user", "session_id": "s1", "seq": 1, "message": {"role": "user", "content": "read it"}})
+    apply(
+        s,
+        {
+            "type": "agent.message",
+            "session_id": "s1",
+            "seq": 2,
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "Reading the file."},
+                {
+                    "type": "tool_use",
+                    "id": "toolu_xyz",
+                    "name": "Read",
+                    "input": {"path": "/tmp/foo"},
+                },
+            ],
+        },
+    )
+    blocks = s.turns[-1].blocks
+    tool = next(b for b in blocks if isinstance(b, ToolUseBlock))
+    assert tool.tool_use_id == "toolu_xyz"
+    assert tool.name == "Read"
+    assert tool.input == {"path": "/tmp/foo"}
+
+
+def test_tool_use_in_message_dedupes_against_standalone_frame():
+    """If both paths fire (CC with --include-partial-messages), the
+    standalone ``agent.tool_use`` arrives first with empty input, then
+    ``agent.message`` carries the full input. Dedupe by id and upgrade
+    the input rather than creating a duplicate block."""
+    s = _new()
+    apply(s, {"type": "agent.user", "session_id": "s1", "seq": 1, "message": {"role": "user", "content": "read it"}})
+    apply(
+        s,
+        {
+            "type": "agent.tool_use",
+            "session_id": "s1",
+            "seq": 2,
+            "tool_use_id": "toolu_xyz",
+            "name": "Read",
+            "input": {},
+        },
+    )
+    apply(
+        s,
+        {
+            "type": "agent.message",
+            "session_id": "s1",
+            "seq": 3,
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "toolu_xyz",
+                    "name": "Read",
+                    "input": {"path": "/tmp/foo"},
+                }
+            ],
+        },
+    )
+    tools = [b for b in s.turns[-1].blocks if isinstance(b, ToolUseBlock)]
+    assert len(tools) == 1
+    assert tools[0].input == {"path": "/tmp/foo"}
+
+
+def test_tool_use_with_list_input_does_not_crash():
+    """Codex's ``exec_command_begin`` translates to ``agent.tool_use`` with
+    ``input`` as a shell argv list. The reducer must accept any JSON shape
+    — coercing to dict() previously raised ValueError and the connection
+    layer swallowed the exception, so tool calls never appeared.
+    """
+    s = _new()
+    apply(s, {"type": "agent.user", "session_id": "s1", "seq": 1, "message": {"role": "user", "content": "ls"}})
+    apply(
+        s,
+        {
+            "type": "agent.tool_use",
+            "session_id": "s1",
+            "seq": 2,
+            "tool_use_id": "tu1",
+            "name": "shell",
+            "input": ["bash", "-c", "ls"],
+        },
+    )
+    block = next(b for b in s.turns[-1].blocks if isinstance(b, ToolUseBlock))
+    assert block.name == "shell"
+    assert block.input == ["bash", "-c", "ls"]
+
+
 def test_session_taken_flips_to_detached():
     s = _new()
     apply(s, {"type": "blemeesd.session_taken", "session_id": "s1", "by_peer_pid": 99})

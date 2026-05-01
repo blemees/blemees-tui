@@ -130,13 +130,21 @@ class ComposerWidget(Widget):
     """
 
     DEFAULT_CSS = """
-    ComposerWidget { height: auto; }
+    ComposerWidget {
+        height: auto;
+        margin-top: 1;
+    }
     ComposerWidget ComposerInput {
-        border: round $accent;
+        /* Muted accent — same colour family as the focused state, faded
+           to ~40% so the relationship reads "active vs inactive". */
+        border: round $accent 40%;
         height: auto;
         min-height: 3;
         max-height: 14;
         padding: 0 1;
+    }
+    ComposerWidget ComposerInput:focus {
+        border: round $accent;
     }
     """
 
