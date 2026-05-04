@@ -39,10 +39,18 @@ dev = [
     "ruff>=0.6",
     "textual-dev>=1.5",
 ]
+docs = [
+    "mkdocs>=1.5",
+    "mkdocs-material>=9.5",
+    "pymdown-extensions>=10",
+]
 
 [project.urls]
 Homepage = "https://github.com/blemees/blemees-tui"
 Repository = "https://github.com/blemees/blemees-tui"
+Documentation = "https://github.com/blemees/blemees-tui/tree/main/docs"
+Issues = "https://github.com/blemees/blemees-tui/issues"
+Changelog = "https://github.com/blemees/blemees-tui/blob/main/CHANGELOG.md"
 Spec = "https://github.com/blemees/blemees-tui/blob/main/docs/SPEC.md"
 
 [tool.setuptools.packages.find]

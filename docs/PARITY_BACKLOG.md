@@ -90,7 +90,37 @@ take + open questions that need answers before building.
 - **Open question**: anything else the user wants surfaced (git branch,
   uptime, daemon version, …)?
 
-### 8. Subagent visual nesting + attaching to subagent sessions
+### 8. Broadcast send to multiple sessions
+
+A first-class feature unique to blemees-tui (no Claude Code analogue) —
+type a message once and dispatch it to every session you care about.
+
+- **Default mechanic**: per-session "marked" flag toggled from the
+  sidebar (proposed key: `m`, or click). Plain `Enter` sends to active
+  only; `Ctrl+Enter` sends to every marked session.
+- **Visual**: marks show as a glyph next to the session row (proposed
+  `◆`); composer shows `[Ctrl+Enter → N sessions]` hint when marks exist.
+- **Recipient filtering**: only OWNED sessions; WATCHING / CRASHED /
+  CLOSED / DETACHED skipped silently with a footer count.
+- **Busy recipients** (`turn_active=True`): re-use existing
+  `pending_sends` queue — message lands when the current turn ends.
+- **Slash commands**: blocked from broadcasting (`/clear` to N sessions
+  is a foot-gun); composer text starting with `/` or `:` is a no-op +
+  hint.
+- **Open questions**:
+  - Marks vs. a toggleable "broadcast mode"? Default: marks.
+  - Empty-marked-set default for `Ctrl+Enter`: (A) blast all OWNED
+    sessions or (B) no-op with hint? Default: B.
+  - Mark UI: keybinding from the sidebar, click, or both? Default: both.
+  - Per-session response visualization stays as today (active shows,
+    others run in background) or add a split-screen compare view?
+    Default: stays as today; split-screen is much bigger work.
+  - Persistence: marks survive TUI restart (saved in `sessions.json`) or
+    reset per launch? Default: persist.
+  - Slash commands: hard block (default) or allow with explicit
+    confirmation modal?
+
+### 9. Subagent visual nesting + attaching to subagent sessions
 
 - **Two parts**:
   - **Visual**: indent sub-agent turns under their parent tool call in

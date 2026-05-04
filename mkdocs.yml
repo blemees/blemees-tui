@@ -1,0 +1,59 @@
+site_name: blemees-tui
+site_description: Multi-session terminal chat for blemeesd (Claude Code + Codex)
+site_url: https://blemees.github.io/blemees-tui/
+repo_url: https://github.com/blemees/blemees-tui
+repo_name: blemees/blemees-tui
+edit_uri: edit/main/docs/
+
+docs_dir: docs
+
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: amber
+      accent: amber
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: amber
+      accent: amber
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - navigation.indexes
+    - navigation.top
+    - content.code.copy
+    - content.action.edit
+
+nav:
+  - Overview: index.md
+  - Spec: SPEC.md
+  - Implementation plan: IMPLEMENTATION.md
+  - Parity backlog: PARITY_BACKLOG.md
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+
+plugins:
+  - search
