@@ -129,7 +129,7 @@ async def test_chat_pane_renders_pending_errors():
         chat = app.query_one("#chat", ChatPaneWidget)
         sess = SessionState(session_id="s1")
         apply(sess, {
-            "type": "blemeesd.error",
+            "type": "agent.error",
             "session_id": "s1",
             "code": "auth_failed",
             "message": "Claude session not authenticated",
@@ -148,7 +148,7 @@ async def test_chat_pane_replay_gap_banner():
     async with app.run_test() as pilot:
         chat = app.query_one("#chat", ChatPaneWidget)
         sess = SessionState(session_id="s1")
-        apply(sess, {"type": "blemeesd.replay_gap", "session_id": "s1"})
+        apply(sess, {"type": "agent.replay_gap", "session_id": "s1"})
         chat.show_session(sess)
         await pilot.pause()
         assert chat._gap_widget is not None

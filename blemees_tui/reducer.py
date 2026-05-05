@@ -364,7 +364,7 @@ def _on_session_info_reply(state: SessionState, frame: dict[str, Any]) -> None:
 
 
 def _on_open_or_watch_ack(state: SessionState, frame: dict[str, Any]) -> None:
-    """``blemeesd.opened`` / ``blemeesd.watching`` carry ``last_seq`` — the
+    """``agent.opened`` / ``agent.watching`` carry ``last_seq`` — the
     daemon's current high-water mark. If we're behind, start a replay
     progress window so the UI can render a loading overlay until we catch
     up. Brand-new sessions report ``last_seq:0`` (or absent) and skip.
@@ -390,13 +390,13 @@ _HANDLERS = {
     "agent.tool_result": _on_tool_result,
     "agent.notice": _on_notice,
     "agent.result": _on_result,
-    "blemeesd.opened": _on_open_or_watch_ack,
-    "blemeesd.watching": _on_open_or_watch_ack,
-    "blemeesd.session_taken": _on_session_taken,
-    "blemeesd.session_closed": _on_session_closed,
-    "blemeesd.replay_gap": _on_replay_gap,
-    "blemeesd.session_info_reply": _on_session_info_reply,
-    "blemeesd.error": _on_error,
+    "agent.opened": _on_open_or_watch_ack,
+    "agent.watching": _on_open_or_watch_ack,
+    "agent.session_taken": _on_session_taken,
+    "agent.session_closed": _on_session_closed,
+    "agent.replay_gap": _on_replay_gap,
+    "agent.session_info_reply": _on_session_info_reply,
+    "agent.error": _on_error,
 }
 
 

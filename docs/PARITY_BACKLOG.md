@@ -44,7 +44,7 @@ take + open questions that need answers before building.
 - **Default approach**: add a "Resume" tab to
   `widgets/modals/attach.py` populated from `history.json` and
   `connection.list_sessions(live=False)`. Submit issues
-  `blemeesd.open{resume:true, last_seen_seq:0}`.
+  `agent.open{resume:true, last_seen_seq:0}`.
 - **Open questions**:
   - Fuzzy search vs. plain sortable list? Default to plain sortable by
     recency unless user wants fuzzy.
@@ -68,8 +68,8 @@ take + open questions that need answers before building.
   - `model`: `sonnet` `opus` `haiku` `sonnet[1m]` `opus[1m]` `opusplan`
   - `effort`: `low` `medium` `high` `xhigh` `max`
 - **Open questions**:
-  - Daemon API: new verb (e.g. `blemeesd.reconfigure`) or re-issue
-    `blemeesd.open` with new options? Need to inspect daemon protocol
+  - Daemon API: new verb (e.g. `agent.reconfigure`) or re-issue
+    `agent.open` with new options? Need to inspect daemon protocol
     docs / source.
   - User confirmed daemon supports mid-session model changes — verify
     the wire shape before designing.
@@ -212,7 +212,7 @@ Captured here so we don't re-litigate them in the next planning pass.
   pain point.
 - **Built-in command refresh via hidden one-shot session** — feels
   brittle. Better path: ask the daemon team for a
-  `blemeesd.list_skills` / `list_commands` verb. Until then, the static
+  `agent.list_skills` / `list_commands` verb. Until then, the static
   list in `discover.BUILTIN_CC_COMMANDS` is fine.
 - **`@server:resource` MCP resource completion** — daemon owns MCP
   config; users who set up MCP know their resource names.

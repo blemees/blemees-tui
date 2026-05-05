@@ -1,7 +1,7 @@
 """Attach (watch) modal — live-session picker (spec §8.1).
 
 Two paths:
-1. Pick from list — populated via ``blemeesd.list_sessions{live:true}``.
+1. Pick from list — populated via ``agent.list_sessions{live:true}``.
 2. Paste id — UUID-validated free-text fallback.
 
 The modal does not own the connection; the app passes a coroutine

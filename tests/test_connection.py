@@ -45,11 +45,11 @@ async def fake_daemon(short_tmpdir):
                 frame = json.loads(line.decode("utf-8"))
                 received.append(frame)
                 inbound_event.set()
-                if frame.get("type") == "blemeesd.hello":
+                if frame.get("type") == "agent.hello":
                     ack = {
-                        "type": "blemeesd.hello_ack",
+                        "type": "agent.hello_ack",
                         "daemon": "blemees-agentd/0.9.2",
-                        "protocol": "blemees/2",
+                        "protocol": "blemees-agent/1",
                         "pid": 999,
                         "backends": {"claude": "2.1"},
                     }
@@ -76,7 +76,7 @@ async def test_handshake_populates_daemon_info(fake_daemon):
     try:
         # Wait until at least the hello has reached the fake server.
         for _ in range(50):
-            if any(f.get("type") == "blemeesd.hello" for f in received):
+            if any(f.get("type") == "agent.hello" for f in received):
                 break
             await asyncio.sleep(0.02)
         # And until the connection picked up the ack.
@@ -85,11 +85,11 @@ async def test_handshake_populates_daemon_info(fake_daemon):
                 break
             await asyncio.sleep(0.02)
         assert conn.daemon_info.get("backends", {}).get("claude") == "2.1"
-        assert any(f.get("type") == "blemeesd.hello" for f in received)
+        assert any(f.get("type") == "agent.hello" for f in received)
         # Regression: the hello_ack must also reach on_frame so the app can
         # populate state.daemon (the footer otherwise renders "daemon ?" /
         # "no backends" even after the green-dot connect).
-        ack_frames = [f for f in received_frames if f.get("type") == "blemeesd.hello_ack"]
+        ack_frames = [f for f in received_frames if f.get("type") == "agent.hello_ack"]
         assert ack_frames, "hello_ack was not forwarded to on_frame"
         assert ack_frames[0].get("backends", {}).get("claude") == "2.1"
     finally:
@@ -99,7 +99,7 @@ async def test_handshake_populates_daemon_info(fake_daemon):
 @pytest.mark.asyncio
 async def test_tracked_watch_is_restored_on_connect(short_tmpdir):
     """Spec §6.3 / §8.7: on connect, a tracked watch is reissued via
-    ``blemeesd.watch{last_seen_seq:<stored>}``. A successful ``watching``
+    ``agent.watch{last_seen_seq:<stored>}``. A successful ``watching``
     ack keeps it tracked."""
     socket_path = short_tmpdir / "w.sock"
     received: list[dict] = []
@@ -110,18 +110,18 @@ async def test_tracked_watch_is_restored_on_connect(short_tmpdir):
                 line = await reader.readuntil(b"\n")
                 frame = json.loads(line.decode("utf-8"))
                 received.append(frame)
-                if frame.get("type") == "blemeesd.hello":
+                if frame.get("type") == "agent.hello":
                     writer.write((json.dumps({
-                        "type": "blemeesd.hello_ack",
+                        "type": "agent.hello_ack",
                         "daemon": "blemees-agentd/0.9.2",
-                        "protocol": "blemees/2",
+                        "protocol": "blemees-agent/1",
                         "pid": 1,
                         "backends": {"claude": "2.1"},
                     }) + "\n").encode())
                     await writer.drain()
-                elif frame.get("type") == "blemeesd.watch":
+                elif frame.get("type") == "agent.watch":
                     writer.write((json.dumps({
-                        "type": "blemeesd.watching",
+                        "type": "agent.watching",
                         "id": frame.get("id"),
                         "session_id": frame["session_id"],
                         "last_seq": 17,
@@ -136,11 +136,11 @@ async def test_tracked_watch_is_restored_on_connect(short_tmpdir):
         conn.track_watch("sid_w", last_seen_seq=5)
         await conn.start()
         for _ in range(50):
-            if any(f.get("type") == "blemeesd.watch" for f in received):
+            if any(f.get("type") == "agent.watch" for f in received):
                 break
             await asyncio.sleep(0.02)
         assert any(
-            f.get("type") == "blemeesd.watch"
+            f.get("type") == "agent.watch"
             and f.get("session_id") == "sid_w"
             and f.get("last_seen_seq") == 5
             for f in received
@@ -166,18 +166,18 @@ async def test_session_unknown_on_restore_untracks_and_forwards(short_tmpdir):
             while True:
                 line = await reader.readuntil(b"\n")
                 frame = json.loads(line.decode("utf-8"))
-                if frame.get("type") == "blemeesd.hello":
+                if frame.get("type") == "agent.hello":
                     writer.write((json.dumps({
-                        "type": "blemeesd.hello_ack",
+                        "type": "agent.hello_ack",
                         "daemon": "blemees-agentd/0.9.2",
-                        "protocol": "blemees/2",
+                        "protocol": "blemees-agent/1",
                         "pid": 1,
                         "backends": {"claude": "2.1"},
                     }) + "\n").encode())
                     await writer.drain()
-                elif frame.get("type") == "blemeesd.watch":
+                elif frame.get("type") == "agent.watch":
                     writer.write((json.dumps({
-                        "type": "blemeesd.error",
+                        "type": "agent.error",
                         "id": frame.get("id"),
                         "session_id": frame["session_id"],
                         "code": "session_unknown",
@@ -197,7 +197,7 @@ async def test_session_unknown_on_restore_untracks_and_forwards(short_tmpdir):
         await conn.start()
         for _ in range(100):
             if any(
-                f.get("type") == "blemeesd.error"
+                f.get("type") == "agent.error"
                 and f.get("code") == "session_unknown"
                 for f in forwarded
             ):
@@ -207,7 +207,7 @@ async def test_session_unknown_on_restore_untracks_and_forwards(short_tmpdir):
         assert "sid_x" not in conn._tracked
         # Error frame was forwarded — app can archive.
         assert any(
-            f.get("type") == "blemeesd.error"
+            f.get("type") == "agent.error"
             and f.get("code") == "session_unknown"
             and f.get("session_id") == "sid_x"
             for f in forwarded
@@ -225,7 +225,7 @@ async def test_fatal_protocol_mismatch_stops_supervisor(short_tmpdir):
     async def handle(reader, writer):
         try:
             await reader.readuntil(b"\n")
-            err = {"type": "blemeesd.error", "code": "protocol_mismatch", "message": "blemees/3"}
+            err = {"type": "agent.error", "code": "protocol_mismatch", "message": "blemees/3"}
             writer.write((json.dumps(err) + "\n").encode("utf-8"))
             await writer.drain()
         except asyncio.IncompleteReadError:

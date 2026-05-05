@@ -128,7 +128,7 @@ class SessionState:
     # session keeps its own in-progress message.
     draft: str = ""
     # Highest ``seq`` we expect to see during replay, set from
-    # ``blemeesd.opened.last_seq`` / ``blemeesd.watching.last_seq``. While
+    # ``agent.opened.last_seq`` / ``agent.watching.last_seq``. While
     # ``last_seen_seq < replay_target_seq`` the chat pane shows a loading
     # overlay; cleared back to 0 once we catch up.
     replay_target_seq: int = 0
@@ -207,7 +207,7 @@ class EventLog:
 
 @dataclass
 class DaemonInfo:
-    """Mirror of ``blemeesd.hello_ack`` — populated after handshake."""
+    """Mirror of ``agent.hello_ack`` — populated after handshake."""
 
     daemon: str = ""  # e.g. "blemees-agentd/0.9.2"
     protocol: str = ""

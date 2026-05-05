@@ -265,7 +265,7 @@ class BlemeesTuiApp(App):
     def _handle_frame(self, frame: dict[str, Any]) -> None:
         self._debug_frames.append(("in", frame))
         ftype = frame.get("type", "")
-        if ftype == "blemeesd.hello_ack":
+        if ftype == "agent.hello_ack":
             self.state.daemon = DaemonInfo(
                 daemon=str(frame.get("daemon", "")),
                 protocol=str(frame.get("protocol", "")),
@@ -275,7 +275,7 @@ class BlemeesTuiApp(App):
             self.state.event_log.append(
                 EventLogSource.CONNECTION, "hello", f"connected to {self.state.daemon.daemon}"
             )
-        elif ftype == "blemeesd.error" and "session_id" not in frame:
+        elif ftype == "agent.error" and "session_id" not in frame:
             # Connection-scope error — log; reducer doesn't see it.
             code = str(frame.get("code", ""))
             msg = str(frame.get("message", ""))
@@ -305,7 +305,7 @@ class BlemeesTuiApp(App):
                     if sess is not None and sess.pending_sends:
                         # Flush any locally-queued user messages.
                         asyncio.create_task(self._flush_pending_sends(sid))
-                if ftype == "blemeesd.session_closed":
+                if ftype == "agent.session_closed":
                     self._archive_to_history(sess, reason=str(frame.get("reason", "owner_closed")))
                     self._connection and self._connection.untrack(sid)
                     self.state.sessions.pop(sid, None)
@@ -313,7 +313,7 @@ class BlemeesTuiApp(App):
                     if self.state.active_session_id == sid:
                         self._set_active_session(None)
                     self._persist_sessions()
-                if ftype == "blemeesd.error" and frame.get("code") == "session_unknown":
+                if ftype == "agent.error" and frame.get("code") == "session_unknown":
                     self._archive_to_history(sess, reason="session_unknown")
                     self._connection and self._connection.untrack(sid)
                     self.state.sessions.pop(sid, None)

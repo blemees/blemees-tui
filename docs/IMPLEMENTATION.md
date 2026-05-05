@@ -12,7 +12,7 @@ The path you'll actually dogfood: open a Claude session, drive a turn,
 see streaming, close, restart, verify history.
 
 1. **Reducer fills.** `agent.system_init` → `started_at_ms`;
-   `blemeesd.session_info_reply` → `context_tokens`. Drop the
+   `agent.session_info_reply` → `context_tokens`. Drop the
    `options["_notices"]` rate_limits hack — promote to `AppState`.
 2. **App plumbing.** Active-session switching (`1`..`9`, `Ctrl+Tab`);
    `turn_active` disables composer (§7.2); composer history recall
@@ -37,7 +37,7 @@ UI), so write the reconnect-ordering test first.
    render the picker table from §8.1.
 6. **Watch banner + button row.** ChatPane header when `mode=watching`;
    replace composer with `[Take ownership]` `[Stop watching]`.
-7. **Take-ownership flow.** `blemeesd.open(resume=True)` → flip `mode`,
+7. **Take-ownership flow.** `agent.open(resume=True)` → flip `mode`,
    swap UI, persist.
 8. **`session_closed` watcher banner** + `Move to history` action.
 
@@ -119,7 +119,7 @@ shippable; sequence is by user-visible value.
 24. **Resume / history picker for closed sessions.** `Ctrl+T` only lists
     *live* sessions. Add a Resume tab to `widgets/modals/attach.py`
     backed by `list_sessions(cwd=…, live=False)`; on submit issue
-    `blemeesd.open{resume:true, last_seen_seq:0}` to replay from disk.
+    `agent.open{resume:true, last_seen_seq:0}` to replay from disk.
 25. **Mid-session `:model` and `:effort`.** `:model` is documented in
     `commands.py` as cosmetic-only; `:effort` doesn't exist. Either wire
     them to a daemon re-config verb (preferred) or label them as UI

@@ -1,6 +1,6 @@
 """Connection layer (spec §6).
 
-A direct ``asyncio`` implementation of the ``blemees/2`` wire protocol
+A direct ``asyncio`` implementation of the ``blemees-agent/1`` wire protocol
 (rather than a thin wrap around ``blemees.client.BlemeesClient``) — the TUI
 needs control over multi-session multiplexing, watch/unwatch frames, and the
 ``list_sessions{live:true}`` filter that the reference client doesn't expose
@@ -219,7 +219,7 @@ class Connection:
         last_seen_seq: int | None = None,
     ) -> dict[str, Any]:
         frame: dict[str, Any] = {
-            "type": "blemeesd.open",
+            "type": "agent.open",
             "session_id": session_id,
             "backend": backend,
             "options": {backend: dict(options or {})},
@@ -228,7 +228,7 @@ class Connection:
             frame["resume"] = True
         if last_seen_seq is not None:
             frame["last_seen_seq"] = int(last_seen_seq)
-        return await self._request(frame, ack_types=("blemeesd.opened",))
+        return await self._request(frame, ack_types=("agent.opened",))
 
     async def watch_session(
         self,
@@ -237,26 +237,26 @@ class Connection:
         last_seen_seq: int = 0,
     ) -> dict[str, Any]:
         frame = {
-            "type": "blemeesd.watch",
+            "type": "agent.watch",
             "session_id": session_id,
             "last_seen_seq": int(last_seen_seq),
         }
-        return await self._request(frame, ack_types=("blemeesd.watching",))
+        return await self._request(frame, ack_types=("agent.watching",))
 
     async def unwatch(self, session_id: str) -> dict[str, Any]:
         return await self._request(
-            {"type": "blemeesd.unwatch", "session_id": session_id},
-            ack_types=("blemeesd.unwatched",),
+            {"type": "agent.unwatch", "session_id": session_id},
+            ack_types=("agent.unwatched",),
         )
 
     async def close_session(self, session_id: str, *, delete: bool = False) -> dict[str, Any]:
         return await self._request(
-            {"type": "blemeesd.close", "session_id": session_id, "delete": bool(delete)},
-            ack_types=("blemeesd.closed",),
+            {"type": "agent.close", "session_id": session_id, "delete": bool(delete)},
+            ack_types=("agent.closed",),
         )
 
     async def interrupt(self, session_id: str) -> None:
-        await self._send({"type": "blemeesd.interrupt", "session_id": session_id})
+        await self._send({"type": "agent.interrupt", "session_id": session_id})
 
     async def send_user(self, session_id: str, text: str) -> None:
         await self._send(
@@ -273,19 +273,19 @@ class Connection:
         cwd: str | None = None,
         live: bool | None = None,
     ) -> list[dict[str, Any]]:
-        frame: dict[str, Any] = {"type": "blemeesd.list_sessions"}
+        frame: dict[str, Any] = {"type": "agent.list_sessions"}
         if cwd is not None:
             frame["cwd"] = cwd
         if live is not None:
             frame["live"] = bool(live)
-        reply = await self._request(frame, ack_types=("blemeesd.sessions",))
+        reply = await self._request(frame, ack_types=("agent.sessions",))
         sessions = reply.get("sessions") or []
         return list(sessions) if isinstance(sessions, list) else []
 
     async def session_info(self, session_id: str) -> dict[str, Any]:
         return await self._request(
-            {"type": "blemeesd.session_info", "session_id": session_id},
-            ack_types=("blemeesd.session_info_reply",),
+            {"type": "agent.session_info", "session_id": session_id},
+            ack_types=("agent.session_info_reply",),
         )
 
     # ------------------------------------------------------------------
@@ -304,7 +304,7 @@ class Connection:
             reply = await fut
         finally:
             self._pending.pop(req_id, None)
-        if reply.get("type") == "blemeesd.error":
+        if reply.get("type") == "agent.error":
             raise ConnectionError_(f"{reply.get('code', '')}: {reply.get('message', '')}")
         return reply
 
@@ -362,13 +362,13 @@ class Connection:
         self._writer = writer
         await self._send(
             {
-                "type": "blemeesd.hello",
+                "type": "agent.hello",
                 "client": CLIENT_NAME,
                 "protocol": PROTOCOL_VERSION,
             }
         )
         ack = await self._read_one()
-        if ack.get("type") != "blemeesd.hello_ack":
+        if ack.get("type") != "agent.hello_ack":
             if ack.get("code") == "protocol_mismatch":
                 raise FatalProtocolError(ack.get("message", "protocol mismatch"))
             raise ConnectionError_(f"unexpected hello ack: {ack!r}")
@@ -447,7 +447,7 @@ class Connection:
         req_id = frame.get("id")
         if isinstance(req_id, str) and req_id in self._pending:
             pending = self._pending[req_id]
-            if ftype in pending.types or ftype == "blemeesd.error":
+            if ftype in pending.types or ftype == "agent.error":
                 if not pending.fut.done():
                     pending.fut.set_result(frame)
         # 2. Track seq for tracked sessions.
@@ -473,7 +473,7 @@ class Connection:
             if idle < self._idle_threshold:
                 continue
             try:
-                await self._send({"type": "blemeesd.ping"})
+                await self._send({"type": "agent.ping"})
             except (OSError, ConnectionError_):
                 return
 

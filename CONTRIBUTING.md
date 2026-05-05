@@ -88,7 +88,7 @@ CI (when added) will run both.
 ## Spec & protocol
 
 The wire protocol the TUI speaks is documented in `blemees-daemon` (the
-`blemees/2` protocol). The TUI's contract — state model, persistence
+`blemees-agent/1` protocol). The TUI's contract — state model, persistence
 shape, observability — lives in [`docs/SPEC.md`](docs/SPEC.md). When
 behaviour changes, edit the spec first and the code second.
 

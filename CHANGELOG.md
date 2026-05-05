@@ -61,7 +61,7 @@ project tracks [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Multiple `agent.message` frames per turn append their content rather
   than overwriting earlier text or clustering tool blocks at the tail.
 - Footer correctly shows daemon name and backends after the handshake
-  (the `blemeesd.hello_ack` frame now reaches the app's frame handler).
+  (the `agent.hello_ack` frame now reaches the app's frame handler).
 - Footer "turns" count reflects the active session only, not the sum
   across every session.
 - Composer focused-state border no longer touches the footer; both

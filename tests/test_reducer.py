@@ -105,12 +105,12 @@ def test_tool_use_then_tool_result_pairing():
 
 
 def test_open_ack_sets_replay_target_and_apply_clears_when_caught_up():
-    """``blemeesd.opened`` carrying ``last_seq > last_seen_seq`` opens a
+    """``agent.opened`` carrying ``last_seq > last_seen_seq`` opens a
     replay window. The window stays open while subsequent frames advance
     ``last_seen_seq`` toward the target, and clears once we reach it."""
     s = _new()
     s.last_seen_seq = 0  # cold-start
-    apply(s, {"type": "blemeesd.opened", "session_id": "s1", "last_seq": 100})
+    apply(s, {"type": "agent.opened", "session_id": "s1", "last_seq": 100})
     assert s.replay_target_seq == 100
     assert s.replay_start_seq == 0
 
@@ -127,7 +127,7 @@ def test_open_ack_with_no_replay_does_not_set_target():
     """Brand-new sessions report ``last_seq == 0`` (or absent). The reducer
     must not open a phantom replay window."""
     s = _new()
-    apply(s, {"type": "blemeesd.opened", "session_id": "s1", "last_seq": 0})
+    apply(s, {"type": "agent.opened", "session_id": "s1", "last_seq": 0})
     assert s.replay_target_seq == 0
 
 
@@ -344,14 +344,14 @@ def test_tool_use_with_list_input_does_not_crash():
 
 def test_session_taken_flips_to_detached():
     s = _new()
-    apply(s, {"type": "blemeesd.session_taken", "session_id": "s1", "by_peer_pid": 99})
+    apply(s, {"type": "agent.session_taken", "session_id": "s1", "by_peer_pid": 99})
     assert s.mode == SessionMode.DETACHED
     assert s.taken_by_pid == 99
 
 
 def test_replay_gap_marks_session():
     s = _new()
-    apply(s, {"type": "blemeesd.replay_gap", "session_id": "s1"})
+    apply(s, {"type": "agent.replay_gap", "session_id": "s1"})
     assert s.replay_gap is True
 
 
@@ -379,7 +379,7 @@ def test_session_info_reply_updates_context_tokens_and_usage():
     apply(
         s,
         {
-            "type": "blemeesd.session_info_reply",
+            "type": "agent.session_info_reply",
             "session_id": "s1",
             "context_tokens": 14123,
             "model": "claude-sonnet-4-6",

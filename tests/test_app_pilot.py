@@ -117,7 +117,7 @@ async def test_scene_auth_failed_renders_inline_bubble(isolated_state_dir):
         app.state.active_session_id = "s2"
         app._handle_frame(
             {
-                "type": "blemeesd.error",
+                "type": "agent.error",
                 "session_id": "s2",
                 "code": "auth_failed",
                 "message": "session expired",
@@ -141,7 +141,7 @@ async def test_scene_replay_gap_banner(isolated_state_dir):
         sess = SessionState(session_id="s3", backend="claude")
         app.state.sessions["s3"] = sess
         app.state.active_session_id = "s3"
-        app._handle_frame({"type": "blemeesd.replay_gap", "session_id": "s3"})
+        app._handle_frame({"type": "agent.replay_gap", "session_id": "s3"})
         await pilot.pause()
         chat = app.query_one("#chat", ChatPaneWidget)
         assert chat._gap_widget is not None

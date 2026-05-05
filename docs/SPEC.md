@@ -1,10 +1,10 @@
 # blemees-tui — Multi-session terminal chat for blemees-agentd
 
 **Version:** 0.1 (spec)
-**Targets:** `blemees/2` protocol. Daemon ≥0.9.0 is required for the
+**Targets:** `blemees-agent/1` protocol. Daemon ≥0.9.0 is required for the
 extended `list_sessions` filter shape and the `session_closed`
 watcher-side frame (§16). No protocol-version bump — the daemon's
-0.9.0 changes are additive on `blemees/2`.
+0.9.0 changes are additive on `blemees-agent/1`.
 **Language:** Python 3.11+
 **Runtime deps:** `blemees>=0.9.0`, `textual>=0.80`
 **Target OS:** Linux, macOS
@@ -149,7 +149,7 @@ Same precedence as `BlemeesClient.connect()`:
 ### 6.2 Handshake
 
 ```json
-{"type":"blemeesd.hello","client":"blemees-tui/<version>","protocol":"blemees/2"}
+{"type":"agent.hello","client":"blemees-tui/<version>","protocol":"blemees-agent/1"}
 ```
 
 Store `hello_ack.backends` for the new-session modal's backend picker
@@ -175,13 +175,13 @@ shown in debug pane (`Ctrl+D`); not in main UI.
 
 ### 6.5 Fatal protocol mismatch
 
-`blemeesd.error{code:"protocol_mismatch"}` → modal `"daemon speaks
+`agent.error{code:"protocol_mismatch"}` → modal `"daemon speaks
 blemees/X, blemees-tui requires blemees/Y. Upgrade one."` and exit 2.
 No negotiation.
 
 ### 6.6 Slow consumer / oversize / shutdown
 
-`blemeesd.error{code:"slow_consumer"|"oversize_message"|"daemon_shutdown"}`
+`agent.error{code:"slow_consumer"|"oversize_message"|"daemon_shutdown"}`
 is fatal to the connection. Reconnect loop handles it; banner
 explains the cause.
 
@@ -203,7 +203,7 @@ explains the cause.
   - Codex: `sandbox`, `approval-policy`, `developer-instructions`,
     `base-instructions`, `compact-prompt`, `config` (raw TOML/JSON).
 
-Submit → `blemeesd.open{session_id:uuid4(), backend, options}`.
+Submit → `agent.open{session_id:uuid4(), backend, options}`.
 
 ### 7.2 Send / receive
 
@@ -215,7 +215,7 @@ Submit → `blemeesd.open{session_id:uuid4(), backend, options}`.
 
 ### 7.3 Interrupt
 
-`Ctrl+C` → `blemeesd.interrupt`. Daemon emits
+`Ctrl+C` → `agent.interrupt`. Daemon emits
 `agent.result{subtype:"interrupted"}`; UI re-enables composer.
 A second `Ctrl+C` within 1s opens a quit-confirm modal.
 
@@ -223,8 +223,8 @@ A second `Ctrl+C` within 1s opens a quit-confirm modal.
 
 | Key             | Action                | Effect                                                                                                                            |
 |-----------------|-----------------------|-----------------------------------------------------------------------------------------------------------------------------------|
-| `Ctrl+W`        | Close (keep log)      | `blemeesd.close{delete:false}`. Session moves to history pane. Reattachable via daemon log replay.                                |
-| `Ctrl+Shift+W`  | Delete (with confirm) | `blemeesd.close{delete:true}`. Daemon unlinks event log + usage sidecar. Backend native transcript is **not** touched (per spec). |
+| `Ctrl+W`        | Close (keep log)      | `agent.close{delete:false}`. Session moves to history pane. Reattachable via daemon log replay.                                |
+| `Ctrl+Shift+W`  | Delete (with confirm) | `agent.close{delete:true}`. Daemon unlinks event log + usage sidecar. Backend native transcript is **not** touched (per spec). |
 
 ### 7.5 Persisted state across TUI restarts
 
@@ -263,7 +263,7 @@ shutdown.
 
 ### 7.6 Session takeover
 
-`blemeesd.session_taken{by_peer_pid}` → flip the pane into a banner:
+`agent.session_taken{by_peer_pid}` → flip the pane into a banner:
 
 ```
 Session was taken over by pid 12345 at 14:02. [Reclaim] [Move to history]
@@ -288,7 +288,7 @@ a soft toast and refresh composer state from the next `agent.result`.
 
 Two paths in the **Attach** modal (`Ctrl+T`):
 
-- **Pick from list** (primary): TUI calls `blemeesd.list_sessions`
+- **Pick from list** (primary): TUI calls `agent.list_sessions`
   with `live:true` (§16.1) and renders a sortable table over the
   returned `sessions` array, using only the rows whose `attached`,
   `started_at_ms`, etc. fields the daemon populates for live entries:
@@ -308,10 +308,10 @@ Two paths in the **Attach** modal (`Ctrl+T`):
 
 ### 8.2 Subscribe
 
-`blemeesd.watch{session_id, last_seen_seq:0}` to request full ring
+`agent.watch{session_id, last_seen_seq:0}` to request full ring
 replay. With the daemon's durable event log enabled, this
 reconstructs the entire session; without it, only the buffer tail.
-A `blemeesd.replay_gap` arriving in the replay drives a banner so the
+A `agent.replay_gap` arriving in the replay drives a banner so the
 user knows context is incomplete.
 
 ### 8.3 Render
@@ -329,15 +329,15 @@ user knows context is incomplete.
 
 ### 8.4 Take ownership
 
-`[Take ownership]` sends `blemeesd.open{session_id, resume:true}`.
+`[Take ownership]` sends `agent.open{session_id, resume:true}`.
 Daemon notifies the previous owner with `session_taken`. On `opened`
 reply, TUI flips `mode: watching → owned`, swaps button row for
 composer, persists to `sessions.json`.
 
 ### 8.5 Owner-side close
 
-When the owner sends `blemeesd.close`, daemon emits
-`blemeesd.session_closed{session_id, reason:"owner_closed"}` (§16.2)
+When the owner sends `agent.close`, daemon emits
+`agent.session_closed{session_id, reason:"owner_closed"}` (§16.2)
 to all watchers. TUI flips the pane to a closed-state banner:
 
 ```
@@ -346,13 +346,13 @@ Session closed by owner at 14:23. [Move to history]
 
 ### 8.6 Stop watching
 
-`[Stop watching]` → `blemeesd.unwatch`. UI removes pane from sidebar
+`[Stop watching]` → `agent.unwatch`. UI removes pane from sidebar
 (or moves to history if `ui.history_on_unwatch = true`, default `false`).
 
 ### 8.7 Reconnect
 
 Watch entries in `sessions.json` are restored via
-`blemeesd.watch{last_seen_seq:<stored>}` on reconnect. `session_unknown`
+`agent.watch{last_seen_seq:<stored>}` on reconnect. `session_unknown`
 → strip + log.
 
 ---
@@ -581,8 +581,8 @@ HH:MM:SS.mmm  source        session  category           message
 
 Sources:
 
-- `daemon-error` — `blemeesd.error` frames (all codes).
-- `daemon-stderr` — `blemeesd.stderr` lines (rate-limited at daemon).
+- `daemon-error` — `agent.error` frames (all codes).
+- `daemon-stderr` — `agent.stderr` lines (rate-limited at daemon).
 - `notice` — `agent.notice` frames.
 - `tui-internal` — TUI exceptions, render warnings, parse failures,
   queue stalls.
@@ -656,12 +656,12 @@ between TUI instances works exactly as between any clients.
 ## 16. Daemon-side dependencies
 
 All three landed in **daemon 0.9.0** as additive changes on
-`blemees/2` — no protocol-version bump. The TUI requires
+`blemees-agent/1` — no protocol-version bump. The TUI requires
 `blemees>=0.9.0` at install.
 
-### 16.1 `blemeesd.list_sessions` filter shape
+### 16.1 `agent.list_sessions` filter shape
 
-The existing `blemeesd.list_sessions` verb was extended; **no new
+The existing `agent.list_sessions` verb was extended; **no new
 verb was added**. `cwd` and `live` are independent, fully-composable
 filters — omitting a filter means "no filter on that axis":
 
@@ -677,14 +677,14 @@ filters — omitting a filter means "no filter on that axis":
 Request the TUI sends for the watch picker:
 
 ```json
-{"type":"blemeesd.list_sessions","id":"req_10","live":true}
+{"type":"agent.list_sessions","id":"req_10","live":true}
 ```
 
 Reply (one row per live session):
 
 ```json
 {
-  "type":"blemeesd.sessions","id":"req_10",
+  "type":"agent.sessions","id":"req_10",
   "sessions":[
     {
       "session_id":"5a01...",
@@ -718,8 +718,8 @@ shape with seven new live-only optional fields:
   detached or when the kernel/platform doesn't expose peer creds.
   Matches `session_taken.by_peer_pid` semantics.
 - `last_seq` — highest seq the session has produced. Same value the
-  daemon carries on `blemeesd.opened.last_seq` and
-  `blemeesd.watching.last_seq`.
+  daemon carries on `agent.opened.last_seq` and
+  `agent.watching.last_seq`.
 - `turn_active` — true iff the session is between `agent.user` send
   and `agent.result` receive.
 
@@ -731,22 +731,22 @@ absence of a top-level cwd echo. Sort order is `last_active_at_ms`
 (preferred) falling back to `mtime_ms` (disk lag).
 
 JSON Schemas:
-[`inbound/blemeesd.list_sessions.json`](https://github.com/blemees/blemees-daemon/blob/main/blemees/schemas/inbound/blemeesd.list_sessions.json),
-[`outbound/blemeesd.sessions.json`](https://github.com/blemees/blemees-daemon/blob/main/blemees/schemas/outbound/blemeesd.sessions.json),
+[`inbound/agent.list_sessions.json`](https://github.com/blemees/blemees-daemon/blob/main/blemees/schemas/inbound/agent.list_sessions.json),
+[`outbound/agent.sessions.json`](https://github.com/blemees/blemees-daemon/blob/main/blemees/schemas/outbound/agent.sessions.json),
 and the extended `SessionSummary` `$def` in
 [`_common.json`](https://github.com/blemees/blemees-daemon/blob/main/blemees/schemas/_common.json).
 
-### 16.2 `blemeesd.session_closed` (watcher-side)
+### 16.2 `agent.session_closed` (watcher-side)
 
 New outbound frame. Emitted to every watcher of a session (not the
 closer) immediately before the daemon unhooks their writers.
 
 ```json
-{"type":"blemeesd.session_closed","session_id":"5a01...","reason":"owner_closed"}
+{"type":"agent.session_closed","session_id":"5a01...","reason":"owner_closed"}
 ```
 
 `reason` is forward-extensible; daemon 0.9.0 emits only
-`"owner_closed"` (the explicit `blemeesd.close` path). Future codes
+`"owner_closed"` (the explicit `agent.close` path). Future codes
 (`idle_reaped`, `backend_crashed`) are reserved.
 
 The closer does **not** receive `session_closed` — it gets the
@@ -755,7 +755,7 @@ distinct, non-overlapping signals; this lets the TUI handle the two
 cases without trying to disambiguate.
 
 JSON Schema:
-[`outbound/blemeesd.session_closed.json`](https://github.com/blemees/blemees-daemon/blob/main/blemees/schemas/outbound/blemeesd.session_closed.json).
+[`outbound/agent.session_closed.json`](https://github.com/blemees/blemees-daemon/blob/main/blemees/schemas/outbound/agent.session_closed.json).
 
 ### 16.3 Rename: `blemees` → `blemeesctl` (clean break)
 
@@ -911,9 +911,9 @@ blemees-tui/
 
 ## 20. Release sequencing
 
-1. **Daemon 0.9.0** ✅ — extends `blemeesd.list_sessions` (composable
+1. **Daemon 0.9.0** ✅ — extends `agent.list_sessions` (composable
    `cwd` + `live` filters, richer `SessionSummary`), adds
-   `blemeesd.session_closed`, renames console_script to `blemeesctl`
+   `agent.session_closed`, renames console_script to `blemeesctl`
    (no deprecation alias). Ready to ship to PyPI + Homebrew.
 2. **`blemees-tui` v0.1** — targets `blemees>=0.9.0`. Ships to PyPI,
    `uv tool`, `pipx`. Homebrew formula added to `blemees/homebrew-tap`.

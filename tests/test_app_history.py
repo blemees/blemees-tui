@@ -33,7 +33,7 @@ async def test_take_ownership_flips_mode_and_tracks(isolated_state_dir, monkeypa
         open_calls.append(
             {"session_id": session_id, "backend": backend, "resume": resume, "last_seen_seq": last_seen_seq}
         )
-        return {"type": "blemeesd.opened", "session_id": session_id, "last_seq": 0}
+        return {"type": "agent.opened", "session_id": session_id, "last_seq": 0}
 
     monkeypatch.setattr("blemees_tui.connection.Connection.open_session", fake_open)
 
@@ -58,7 +58,7 @@ async def test_take_ownership_flips_mode_and_tracks(isolated_state_dir, monkeypa
 
 @pytest.mark.asyncio
 async def test_session_closed_frame_archives_to_history(isolated_state_dir, monkeypatch):
-    """A ``blemeesd.session_closed`` from the daemon (watcher-side, §16.2)
+    """A ``agent.session_closed`` from the daemon (watcher-side, §16.2)
     should move the session into history and persist."""
     await _start_app_no_socket(monkeypatch)
 
@@ -70,7 +70,7 @@ async def test_session_closed_frame_archives_to_history(isolated_state_dir, monk
         app.state.active_session_id = "sid1"
 
         app._handle_frame({
-            "type": "blemeesd.session_closed",
+            "type": "agent.session_closed",
             "session_id": "sid1",
             "reason": "owner_closed",
         })
