@@ -1,4 +1,4 @@
-# blemees-tui — Multi-session terminal chat for blemeesd
+# blemees-tui — Multi-session terminal chat for blemees-agentd
 
 **Version:** 0.1 (spec)
 **Targets:** `blemees/2` protocol. Daemon ≥0.9.0 is required for the
@@ -17,14 +17,14 @@ follows once this spec is signed off.
 
 ## 1. Overview
 
-`blemees` is a terminal chat UI that talks to a local `blemeesd` daemon
+`blemees` is a terminal chat UI that talks to a local `blemees-agentd` daemon
 and hosts multiple chat sessions in one process. Each session runs
 against a chosen backend (Claude Code or Codex) inside the daemon; the
 TUI is a thin presentation layer.
 
 The TUI:
 
-- Holds **one** socket connection to `blemeesd`.
+- Holds **one** socket connection to `blemees-agentd`.
 - Multiplexes any number of live chat sessions over it.
 - Reattaches across TUI restarts via `resume:true` + stored `last_seen_seq`.
 - Renders the unified `agent.*` event vocabulary so Claude and Codex
@@ -81,15 +81,15 @@ on `$PATH`.
 │   ├─ EventLog            (ring of 2000 entries)      │
 │   └─ Config                                          │
 │                                                      │
-│  Persistence ($XDG_STATE_HOME/blemees-tui/)         │
+│  Persistence ($XDG_STATE_HOME/blemees/tui/)         │
 │   ├─ sessions.json       (live + watching)           │
 │   ├─ history.json        (closed-but-remembered)     │
-│   └─ blemees-tui.log     (rotating)                  │
+│   └─ tui.log     (rotating)                  │
 │                                                      │
 └──────────────────────────────────────────────────────┘
                          │ AF_UNIX
                          ▼
-                 blemeesd (separate process)
+                 blemees-agentd (separate process)
 ```
 
 `Connection` is a thin wrapper around `blemees.client.BlemeesClient`
@@ -100,7 +100,7 @@ that adds:
   for every known session.
 - A central event-log feed.
 
-`SessionState` is a reducer fed `agent.*` and per-session `blemeesd.*`
+`SessionState` is a reducer fed `agent.*` and per-session `blemees-agentd.*`
 frames. It owns:
 
 - Turns (each turn: user message + assistant content blocks + tool
@@ -130,7 +130,7 @@ durable logs deterministically.
 The console script `blemees` is owned by the TUI from v0.1 onward.
 The daemon's existing wire-probe REPL was renamed to `blemeesctl` in
 daemon 0.9.0 (§16.3) — a clean break: daemon 0.9.0 ships only
-`blemeesd` and `blemeesctl`, leaving `blemees` free for the TUI to
+`blemees-agentd` and `blemeesctl`, leaving `blemees` free for the TUI to
 claim. No deprecation alias was used because any alias on the daemon
 side would have collided with this package's claim on the name.
 
@@ -142,9 +142,9 @@ side would have collided with this package's claim on the name.
 
 Same precedence as `BlemeesClient.connect()`:
 
-1. `$BLEMEESD_SOCKET` (and CLI `--socket <path>`).
-2. `$XDG_RUNTIME_DIR/blemeesd.sock`.
-3. `/tmp/blemeesd-<uid>.sock`.
+1. `$BLEMEES_AGENTD_SOCKET` (and CLI `--socket <path>`).
+2. `$XDG_RUNTIME_DIR/blemees/agentd.sock`.
+3. `/tmp/blemees-agentd-<uid>.sock`.
 
 ### 6.2 Handshake
 
@@ -228,7 +228,7 @@ A second `Ctrl+C` within 1s opens a quit-confirm modal.
 
 ### 7.5 Persisted state across TUI restarts
 
-`$XDG_STATE_HOME/blemees-tui/sessions.json`:
+`$XDG_STATE_HOME/blemees/tui/sessions.json`:
 
 ```jsonc
 {
@@ -496,8 +496,8 @@ config. All keybindings overridable via `[keybindings]` in config.
 
 ## 12. Configuration
 
-Path: `$XDG_CONFIG_HOME/blemees-tui/config.toml`
-(or `~/.config/blemees-tui/config.toml`).
+Path: `$XDG_CONFIG_HOME/blemees/tui.toml`
+(or `~/.config/blemees/tui.toml`).
 
 ```toml
 [connection]
@@ -537,10 +537,10 @@ file > built-in defaults.
 
 | Path                                              | Purpose                                                                       |
 |---------------------------------------------------|-------------------------------------------------------------------------------|
-| `$XDG_STATE_HOME/blemees-tui/sessions.json`       | Live + watching sessions known to TUI. Rewritten on every state change.       |
-| `$XDG_STATE_HOME/blemees-tui/history.json`        | Closed-but-remembered sessions. Bounded 200 entries.                           |
-| `$XDG_STATE_HOME/blemees-tui/blemees-tui.log`     | Rotating log (weekly, 7 keep).                                                |
-| `$XDG_STATE_HOME/blemees-tui/transcripts/`        | `Ctrl+S` exports. Filename: `<title-slug>-<short-id>.md`.                      |
+| `$XDG_STATE_HOME/blemees/tui/sessions.json`       | Live + watching sessions known to TUI. Rewritten on every state change.       |
+| `$XDG_STATE_HOME/blemees/tui/history.json`        | Closed-but-remembered sessions. Bounded 200 entries.                           |
+| `$XDG_STATE_HOME/blemees/tui/tui.log`     | Rotating log (weekly, 7 keep).                                                |
+| `$XDG_STATE_HOME/blemees/tui/transcripts/`        | `Ctrl+S` exports. Filename: `<title-slug>-<short-id>.md`.                      |
 
 Atomic writes for JSON files: write to `<file>.tmp`, `fsync`, rename.
 
@@ -594,7 +594,7 @@ history regardless.
 
 ### 14.3 Persistent log
 
-`$XDG_STATE_HOME/blemees-tui/blemees-tui.log`. Always written. Format:
+`$XDG_STATE_HOME/blemees/tui/tui.log`. Always written. Format:
 one structured event per line with timestamp, level, source,
 session_id, message, context. `tail -f` friendly.
 
@@ -635,9 +635,9 @@ bubble in the transcript at their wall-clock position. See §9.8.
 
 ### 15.1 Daemon down at launch
 
-Friendly screen: `"Can't reach blemeesd at <socket>. Reconnecting…"`.
+Friendly screen: `"Can't reach blemees-agentd at <socket>. Reconnecting…"`.
 Background reconnect loop. `Ctrl+R` retries sooner. `?` modal lists
-common fixes (`systemctl --user start blemeesd`, `brew services start
+common fixes (`systemctl --user start blemees-agentd`, `brew services start
 blemees`, etc.).
 
 ### 15.2 Backend missing from daemon
@@ -763,7 +763,7 @@ Daemon 0.9.0's `pyproject.toml`:
 
 ```toml
 [project.scripts]
-blemeesd = "blemees.__main__:main"
+blemees-agentd = "blemees.__main__:main"
 blemeesctl = "blemees.cli:main"
 # `blemees` is intentionally NOT registered. From 0.9.0 on it
 # belongs to the chat TUI shipped by blemees-tui.
@@ -795,7 +795,7 @@ identifies as `blemeesctl/<version>`.
 ### 17.1 Unit tests
 
 - **Reducer** — exhaustive coverage of every `agent.*` and
-  per-session `blemeesd.*` type. Property tests for sequence
+  per-session `blemees-agentd.*` type. Property tests for sequence
   invariants (every turn ends with `agent.result`; `seq` strictly
   monotone).
 - **Connection layer** — replay path, gap path, takeover path,
@@ -821,7 +821,7 @@ output for:
 ### 17.3 End-to-end
 
 Reuse `blemees-daemon/tests` mock backend fixtures. Spawn a real
-`blemeesd` against `mock-claude` / `mock-codex` stubs, drive it
+`blemees-agentd` against `mock-claude` / `mock-codex` stubs, drive it
 through TUI keystrokes, assert observable output.
 
 ### 17.4 Manual matrix (release gate)
@@ -851,7 +851,7 @@ blemees-tui/
 │   ├── app.py                 # Textual App subclass
 │   ├── connection.py          # BlemeesClient wrapper + reducer pump
 │   ├── state.py               # AppState, SessionStore, SessionState
-│   ├── reducer.py             # pure agent.*/blemeesd.* → SessionState
+│   ├── reducer.py             # pure agent.*/blemees-agentd.* → SessionState
 │   ├── persistence.py         # sessions.json, history.json, log
 │   ├── config.py              # TOML config loader
 │   ├── widgets/
@@ -920,7 +920,7 @@ blemees-tui/
 
 After step 2, `pip install blemees-tui` cleanly installs the chat
 TUI as `blemees`; `pip install blemees` installs the daemon with
-`blemeesd` and `blemeesctl`. The two console_script namespaces no
+`blemees-agentd` and `blemeesctl`. The two console_script namespaces no
 longer overlap, so installing both is a no-op for the `blemees`
 binding (TUI owns it, daemon doesn't claim it).
 

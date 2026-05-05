@@ -15,7 +15,7 @@ Responsibilities:
 * Central event-log feed for the TUI's observability surfaces.
 
 Frame dispatch follows the reducer's contract: this module forwards every
-``agent.*`` and per-session ``blemeesd.*`` frame to the active reducer pump
+``agent.*`` and per-session ``blemees-agentd.*`` frame to the active reducer pump
 via the ``on_frame`` callback the app registers.
 """
 
@@ -44,13 +44,13 @@ logger = logging.getLogger("blemees_tui")
 
 
 def default_socket_path() -> str:
-    env = os.environ.get("BLEMEESD_SOCKET")
+    env = os.environ.get("BLEMEES_AGENTD_SOCKET")
     if env:
         return env
     xdg = os.environ.get("XDG_RUNTIME_DIR")
     if xdg:
-        return str(Path(xdg) / "blemeesd.sock")
-    return f"/tmp/blemeesd-{os.getuid()}.sock"
+        return str(Path(xdg) / "blemees" / "agentd.sock")
+    return f"/tmp/blemees-agentd-{os.getuid()}.sock"
 
 
 # ---------------------------------------------------------------------------
@@ -107,7 +107,7 @@ class ConnectionStatus:
 
 
 class Connection:
-    """``blemeesd`` socket multiplexer for the TUI."""
+    """``blemees-agentd`` socket multiplexer for the TUI."""
 
     def __init__(
         self,

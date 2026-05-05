@@ -1,4 +1,4 @@
-"""blemees-tui — Multi-session terminal chat for blemeesd.
+"""blemees-tui — Multi-session terminal chat for blemees-agentd.
 
 See ``docs/SPEC.md`` at the repository root for the design contract.
 """

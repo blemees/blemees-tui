@@ -48,7 +48,7 @@ async def fake_daemon(short_tmpdir):
                 if frame.get("type") == "blemeesd.hello":
                     ack = {
                         "type": "blemeesd.hello_ack",
-                        "daemon": "blemeesd/0.9.2",
+                        "daemon": "blemees-agentd/0.9.2",
                         "protocol": "blemees/2",
                         "pid": 999,
                         "backends": {"claude": "2.1"},
@@ -113,7 +113,7 @@ async def test_tracked_watch_is_restored_on_connect(short_tmpdir):
                 if frame.get("type") == "blemeesd.hello":
                     writer.write((json.dumps({
                         "type": "blemeesd.hello_ack",
-                        "daemon": "blemeesd/0.9.2",
+                        "daemon": "blemees-agentd/0.9.2",
                         "protocol": "blemees/2",
                         "pid": 1,
                         "backends": {"claude": "2.1"},
@@ -169,7 +169,7 @@ async def test_session_unknown_on_restore_untracks_and_forwards(short_tmpdir):
                 if frame.get("type") == "blemeesd.hello":
                     writer.write((json.dumps({
                         "type": "blemeesd.hello_ack",
-                        "daemon": "blemeesd/0.9.2",
+                        "daemon": "blemees-agentd/0.9.2",
                         "protocol": "blemees/2",
                         "pid": 1,
                         "backends": {"claude": "2.1"},

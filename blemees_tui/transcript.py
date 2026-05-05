@@ -1,7 +1,7 @@
 """Markdown transcript export (spec §13).
 
 Pure: ``render(session) → str``. The app writes the result to
-``$XDG_STATE_HOME/blemees-tui/transcripts/<title-slug>-<short-id>.md``.
+``$XDG_STATE_HOME/blemees/tui/transcripts/<title-slug>-<short-id>.md``.
 """
 
 from __future__ import annotations

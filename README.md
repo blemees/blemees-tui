@@ -1,6 +1,6 @@
 # blemees-tui
 
-**Multi-session terminal chat for `blemeesd`** — Claude Code + Codex agents,
+**Multi-session terminal chat for `blemees-agentd`** — Claude Code + Codex agents,
 side-by-side, in one process. Watch a session running in another terminal,
 take ownership when you need to type, and never lose a transcript across
 restarts.
@@ -17,13 +17,13 @@ restarts.
 Claude Code and Codex are great in their own terminal, but bouncing between
 sessions, recovering from a closed shell, or watching a long-running
 agent from a second machine all leave you stitching tabs together by hand.
-`blemees-tui` is a thin presentation layer over [`blemeesd`](https://github.com/blemees/blemees-daemon)
+`blemees-tui` is a thin presentation layer over [`blemees-agentd`](https://github.com/blemees/blemees-daemon)
 that keeps every session live in one window:
 
 - **Multi-session sidebar** with keyboard navigation (`Ctrl+1..0`,
   `Ctrl+Tab`, `:select N`).
 - **Watch mode** — observe a session running anywhere
-  (`blemeesd` is a Unix-socket daemon; SSH-forward it across machines)
+  (`blemees-agentd` is a Unix-socket daemon; SSH-forward it across machines)
   and **take ownership** with one click.
 - **Streaming Markdown transcript** with collapsible reasoning,
   syntax-highlighted Edit diffs, Write previews per language, and live
@@ -51,17 +51,17 @@ pipx install blemees-tui
 brew install blemees/tap/blemees-tui
 ```
 
-Requires Python ≥ 3.11 and a running `blemeesd ≥ 0.9.0` Unix socket.
+Requires Python ≥ 3.11 and a running `blemees-agentd ≥ 0.9.0` Unix socket.
 
 ## Quickstart
 
 ```sh
-# Auto-resolve the daemon socket (uses $BLEMEESD_SOCKET, then
-# $XDG_RUNTIME_DIR/blemeesd.sock, then /tmp/blemeesd-<uid>.sock)
+# Auto-resolve the daemon socket (uses $BLEMEES_AGENTD_SOCKET, then
+# $XDG_RUNTIME_DIR/blemees/agentd.sock, then /tmp/blemees-agentd-<uid>.sock)
 blemees
 
 # Or point explicitly:
-blemees --socket /path/to/blemeesd.sock
+blemees --socket /path/to/agentd.sock
 ```
 
 | Action | Keys |
@@ -87,7 +87,7 @@ for TUI commands — see `:help`.
 
 ## Configuration
 
-`$XDG_CONFIG_HOME/blemees-tui/config.toml` (or `~/.config/blemees-tui/config.toml`):
+`$XDG_CONFIG_HOME/blemees/tui.toml` (or `~/.config/blemees/tui.toml`):
 
 ```toml
 [connection]
@@ -114,22 +114,22 @@ keep_days = 7
 CLI overrides:
 
 ```sh
-blemees --socket /tmp/blemeesd.sock --log-level debug
+blemees --socket /tmp/blemees-agentd.sock --log-level debug
 ```
 
-Env-var overrides: `BLEMEESD_SOCKET`, `BLEMEES_TUI_THEME`,
+Env-var overrides: `BLEMEES_AGENTD_SOCKET`, `BLEMEES_TUI_THEME`,
 `BLEMEES_TUI_LOG_LEVEL`, `BLEMEES_TUI_BACKEND`.
 
 ## Persistence
 
-Files under `$XDG_STATE_HOME/blemees-tui/`:
+Files under `$XDG_STATE_HOME/blemees/tui/`:
 
 - `sessions.json` — index of live + watching sessions.
 - `history.json` — bounded ring (200 entries) of closed-but-remembered sessions.
 - `snapshots/<id>.json` — full per-session in-memory state cached to disk
   so a TUI restart skips the full daemon replay.
 - `transcripts/` — `Ctrl+S` Markdown exports.
-- `blemees-tui.log` — rotating log (weekly, 7 keep).
+- `tui.log` — rotating log (weekly, 7 keep).
 
 ## Develop
 

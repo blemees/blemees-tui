@@ -19,5 +19,5 @@ def isolated_state_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 def _clean_blemees_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """Drop any caller env that could leak between tests."""
     for key in list(os.environ):
-        if key.startswith("BLEMEES_TUI_") or key == "BLEMEESD_SOCKET":
+        if key.startswith("BLEMEES_TUI_") or key == "BLEMEES_AGENTD_SOCKET":
             monkeypatch.delenv(key, raising=False)

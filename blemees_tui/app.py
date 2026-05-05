@@ -286,7 +286,7 @@ class BlemeesTuiApp(App):
         sid = frame.get("session_id")
         if isinstance(sid, str):
             sess = self.state.sessions.get(sid)
-            if sess is None and ftype.startswith(("agent.", "blemeesd.")):
+            if sess is None and ftype.startswith(("agent.", "blemees-agentd.")):
                 # Unknown session — only register if it's a session-scoped frame
                 # we can reasonably attach (e.g. agent.system_init from a watch).
                 sess = SessionState(session_id=sid)

@@ -12,13 +12,13 @@ from . import __version__
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="blemees",
-        description="Multi-session terminal chat for blemeesd.",
+        description="Multi-session terminal chat for blemees-agentd.",
     )
     p.add_argument("--version", action="version", version=f"blemees-tui {__version__}")
     p.add_argument(
         "--socket",
         default=None,
-        help="Override blemeesd socket path (also $BLEMEESD_SOCKET).",
+        help="Override blemees-agentd socket path (also $BLEMEES_AGENTD_SOCKET).",
     )
     p.add_argument(
         "--config",

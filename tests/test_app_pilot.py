@@ -266,7 +266,7 @@ async def test_scene_event_log_overlay_opens(isolated_state_dir):
         await pilot.pause()
         from blemees_tui.state import EventLogSource
 
-        app.state.event_log.append(EventLogSource.CONNECTION, "hello", "blemeesd/0.9.2")
+        app.state.event_log.append(EventLogSource.CONNECTION, "hello", "blemees-agentd/0.9.2")
         app.action_event_log()
         await pilot.pause()
         # The overlay is the topmost screen.

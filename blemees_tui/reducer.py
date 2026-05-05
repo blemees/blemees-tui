@@ -304,7 +304,7 @@ def _on_result(state: SessionState, frame: dict[str, Any]) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Handlers — per-session blemeesd.* (spec §15)
+# Handlers — per-session blemees-agentd.* (spec §15)
 # ---------------------------------------------------------------------------
 
 

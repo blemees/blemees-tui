@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "blemees-tui"
 version = "0.1.0"
-description = "Multi-session terminal chat for blemeesd (Claude Code + Codex)."
+description = "Multi-session terminal chat for blemees-agentd (Claude Code + Codex)."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
@@ -25,7 +25,7 @@ classifiers = [
     "Topic :: Terminals",
 ]
 dependencies = [
-    "blemees>=0.9.0",
+    "blemees-agent>=0.10.0",
     "textual>=0.80",
 ]
 

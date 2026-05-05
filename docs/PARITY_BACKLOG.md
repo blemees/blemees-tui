@@ -137,15 +137,15 @@ persistence / commands plumbing. Tests in `test_persistence.py`,
 ### Connecting to agents in Docker containers (via socket file)
 
 - **No TUI changes needed for the basic case** — `--socket /path` and
-  `BLEMEESD_SOCKET=` env already exist. Compose patterns:
+  `BLEMEES_AGENTD_SOCKET=` env already exist. Compose patterns:
   - Daemon in container, socket bind-mounted out:
-    `-v /tmp/blemeesd.sock:/host/sock`
+    `-v /tmp/blemees-agentd.sock:/host/sock`
   - Daemon on host, socket mounted into container.
   - Remote host: `ssh -L /local/sock:/container/sock user@host`.
 - **Possible TUI work**: `:connect <path>` command to swap socket
   without restarting. Useful for users who switch between local and
   containerised daemons mid-session.
-- **Documentation work**: a short "running blemeesd in Docker" section
+- **Documentation work**: a short "running blemees-agentd in Docker" section
   in the README covering the three patterns above.
 
 ### More useful left-hand panels / plugin-rendered panels
@@ -156,7 +156,7 @@ persistence / commands plumbing. Tests in `test_persistence.py`,
   - **(b) Stacked panels** — sessions on top, configurable second pane
     below (file tree, recent edits, etc.).
   - **(c) Plugin slot** — Python-importable interface; users drop a
-    Textual widget into `~/.config/blemees-tui/panels/foo.py` and it
+    Textual widget into `~/.config/blemees/tui/panels/foo.py` and it
     appears. Highest power, highest API-stability commitment.
 - **Open question**: which direction? Default lean: (a) tabbed sidebar
   first, (c) plugin slot only after the tabbed sidebar's API has

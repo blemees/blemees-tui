@@ -1,17 +1,17 @@
 """TUI-side persistence (spec §13).
 
-Files kept under ``$XDG_STATE_HOME/blemees-tui/``:
+Files kept under ``$XDG_STATE_HOME/blemees/tui/``:
 
-* ``sessions.json``   — live + watching sessions index, rewritten on every change.
-* ``history.json``    — bounded ring (200 entries) of closed-but-remembered
-                        sessions.
-* ``snapshots/``      — full per-session in-memory state cached to disk
-                        (turn list, blocks, usage, drafts) so a TUI restart
-                        skips the full daemon replay.
-* ``blemees-tui.log`` — rotating log (weekly, 7 keep). Configured by the
-                        connection layer; this module hands back the path.
-* ``transcripts/``    — ``Ctrl+S`` Markdown exports (different from the
-                        snapshots cache above — those are JSON state).
+* ``sessions.json`` — live + watching sessions index, rewritten on every change.
+* ``history.json``  — bounded ring (200 entries) of closed-but-remembered
+                      sessions.
+* ``snapshots/``    — full per-session in-memory state cached to disk
+                      (turn list, blocks, usage, drafts) so a TUI restart
+                      skips the full daemon replay.
+* ``tui.log``       — rotating log (weekly, 7 keep). Configured by the
+                      connection layer; this module hands back the path.
+* ``transcripts/``  — ``Ctrl+S`` Markdown exports (different from the
+                      snapshots cache above — those are JSON state).
 
 JSON writes are atomic: write to ``<file>.tmp``, ``fsync``, ``rename``.
 """
@@ -38,8 +38,9 @@ HISTORY_MAX_ENTRIES = 200
 
 
 def state_dir() -> Path:
+    """``$XDG_STATE_HOME/blemees/tui`` per the suite-shared layout."""
     base = os.environ.get("XDG_STATE_HOME") or str(Path.home() / ".local" / "state")
-    return Path(base) / "blemees-tui"
+    return Path(base) / "blemees" / "tui"
 
 
 def sessions_path() -> Path:
@@ -51,7 +52,7 @@ def history_path() -> Path:
 
 
 def log_path() -> Path:
-    return state_dir() / "blemees-tui.log"
+    return state_dir() / "tui.log"
 
 
 def transcripts_dir() -> Path:
@@ -249,7 +250,7 @@ _LEVELS = {
 
 
 def configure_logger(level: str = "info", keep_days: int = 7) -> logging.Logger:
-    """Configure the rotating ``blemees-tui.log`` handler.
+    """Configure the rotating ``tui.log`` handler.
 
     Idempotent — repeated calls re-use the existing handler. Returns the
     package logger.

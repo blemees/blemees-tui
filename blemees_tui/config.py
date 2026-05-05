@@ -67,9 +67,9 @@ class Config:
 
 
 def default_config_path() -> Path:
-    """``$XDG_CONFIG_HOME/blemees-tui/config.toml`` (or ``~/.config/...``)."""
+    """``$XDG_CONFIG_HOME/blemees/tui.toml`` (or ``~/.config/blemees/tui.toml``)."""
     base = os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
-    return Path(base) / "blemees-tui" / "config.toml"
+    return Path(base) / "blemees" / "tui.toml"
 
 
 def _coerce(target_type: type, raw: Any) -> Any:

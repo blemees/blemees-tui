@@ -72,7 +72,7 @@ Paper-cuts. Won't block dogfooding but needed for the v0.1 contract.
     `:delete`, `:interrupt`, `:rename`, `:cwd`, `:model`, `:watch`,
     `:help`, `:q`) with Tab-complete. ``/`` is reserved for the active
     backend so Claude Code skills / Codex slash commands pass through.
-16. **Ctrl+S transcript export** to `$XDG_STATE_HOME/blemees-tui/transcripts/`.
+16. **Ctrl+S transcript export** to `$XDG_STATE_HOME/blemees/tui/transcripts/`.
 
 ---
 
@@ -102,7 +102,7 @@ shippable; sequence is by user-visible value.
     is a static seven-entry list — Claude Code ships ~50 + bundled skills
     + plugin commands + MCP prompts, and the set churns. Probe `/help`
     once per (backend, version) on first connect, parse, cache to
-    `$XDG_STATE_HOME/blemees-tui/help-<backend>-<version>.json`. Use
+    `$XDG_STATE_HOME/blemees/tui/help-<backend>-<version>.json`. Use
     cached entries for the `/`-completion popup.
 22. **`@`-mention file completion.** Composer doesn't recognise `@` today
     — typing `@src/auth.ts` is a literal string. Add a third pool to
@@ -128,7 +128,7 @@ shippable; sequence is by user-visible value.
     xhigh/max` for effort.
 26. **Image paste in composer.** Spec §3 defers multimodal but Claude
     Code-native users paste screenshots constantly. Catch `Ctrl+V` of
-    image data, write to `$XDG_CACHE_HOME/blemees-tui/pastes/`, insert
+    image data, write to `$XDG_CACHE_HOME/blemees/tui/pastes/`, insert
     `[Image #N]` chip, send `agent.user` with multipart `content`. Stub
     OK for v0.1.x; full drag-and-drop can wait.
 

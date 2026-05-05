@@ -108,7 +108,7 @@ async def test_footer_renders_errors_and_rate_chips():
     sess.pending_errors.append({"code": "auth_failed", "message": "x"})
     state.sessions["s"] = sess
     state.rate_limits = RateLimitsNotice(level="warn", text="resets in 4m", session_id="s")
-    state.daemon.daemon = "blemeesd/0.9.2"
+    state.daemon.daemon = "blemees-agentd/0.9.2"
     state.daemon.backends = {"claude": "2.1"}
     app = _FooterOnlyApp(state)
     async with app.run_test() as pilot:
@@ -118,7 +118,7 @@ async def test_footer_renders_errors_and_rate_chips():
         rendered = str(footer.render())
         assert "1 errors" in rendered
         assert "resets in 4m" in rendered
-        assert "blemeesd/0.9.2" in rendered
+        assert "blemees-agentd/0.9.2" in rendered
 
 
 @pytest.mark.asyncio

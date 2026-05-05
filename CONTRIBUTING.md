@@ -8,7 +8,7 @@ change fits, open an issue first.
 
 ## Architecture in 30 seconds
 
-`blemees-tui` is a thin presentation layer over the `blemeesd` daemon.
+`blemees-tui` is a thin presentation layer over the `blemees-agentd` daemon.
 The daemon handles all agent execution (Claude Code, Codex, MCP, hooks,
 sub-agents); the TUI's job is to **drive sessions and render their event
 streams legibly**. When in doubt, surface daemon events well rather than
@@ -38,7 +38,7 @@ python -m venv .venv && source .venv/bin/activate
 pip install -e '.[dev]'
 ```
 
-Requires Python ≥ 3.11 and a running `blemeesd ≥ 0.9.0` if you want to
+Requires Python ≥ 3.11 and a running `blemees-agentd ≥ 0.9.0` if you want to
 exercise the live socket path.
 
 ## Run the tests

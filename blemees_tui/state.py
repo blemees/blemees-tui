@@ -209,7 +209,7 @@ class EventLog:
 class DaemonInfo:
     """Mirror of ``blemeesd.hello_ack`` — populated after handshake."""
 
-    daemon: str = ""  # e.g. "blemeesd/0.9.2"
+    daemon: str = ""  # e.g. "blemees-agentd/0.9.2"
     protocol: str = ""
     pid: int = 0
     backends: dict[str, str] = field(default_factory=dict)

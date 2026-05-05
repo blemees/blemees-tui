@@ -1,7 +1,7 @@
 """Event log overlay (spec §14.2).
 
 Filter chips by source · ``[/]`` text filter · ``[s]`` save log to a
-file under ``$XDG_STATE_HOME/blemees-tui/`` · ``[c]`` copy line ·
+file under ``$XDG_STATE_HOME/blemees/tui/`` · ``[c]`` copy line ·
 ``[C]`` copy all visible.
 """
 
