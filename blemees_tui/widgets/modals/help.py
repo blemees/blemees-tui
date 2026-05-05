@@ -18,20 +18,34 @@ _KEY_TABLE = """\
   Ctrl+E            Event log overlay
   Ctrl+D            Debug pane (raw frames)
   Ctrl+S            Save transcript
-  Ctrl+1..9, Ctrl+0 Switch to session N (Ctrl+0 = 10)
-  Ctrl+Tab          Next session (cycles past 10)
+  F1..F12           Switch to session N (1-12)
+  Ctrl+Tab          Next session (cycles past 12)
   t                 Toggle thinking visibility
+  m                 Toggle broadcast mark on active session
   Tab               Activate the composer (Esc to deactivate)
+  Ctrl+J            Insert newline in composer (multiline submit)
   :                 Focus composer + open command line
-  PgUp / PgDn       Scroll chat pane
+  PgUp / PgDn       Scroll chat pane (PgUp pauses tailing)
   Ctrl+↑ / Ctrl+↓   Line scroll
-  Home / End        Top / bottom of chat
+  Home / End        Top / bottom of chat (End resumes tailing)
   ?                 This help
   q                 Quit
 
+[b]Broadcast send[/b]
+  Mark sessions with [b]m[/] (or [b]:mark[/], [b]:mark all[/]).
+  Type [b]>> message[/] in the composer to fan it out to all marked
+  sessions. Marked rows show ◆ in the sidebar.
+
 [b]TUI commands (vim-style ``:``)[/b]
-  :new :close :delete :interrupt :rename :cwd :model :watch :select :help :q
-  ``:select N`` jumps to session N (any number — for past Ctrl+0/10).
+  :new :close :delete :interrupt :rename :cwd :model :watch :select
+  :mark :help :q
+  ``:select N`` jumps to session N (any number — for past F12).
+  Multi-target syntax — every session-specific command takes a leading
+  list of 1-indexed session numbers (empty = active session):
+    ``:close 1 3 5`` close sessions 1, 3, 5
+    ``:rename 1 3 my title`` rename sessions 1 & 3 to "my title"
+    ``:cwd 2 /path`` relabel session 2's cwd
+  ``:mark all`` marks every owned session; ``:mark clear`` clears all.
   These are intercepted by the TUI.
 
 [b]Backend slash commands (``/``)[/b]

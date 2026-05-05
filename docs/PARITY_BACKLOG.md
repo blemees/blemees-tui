@@ -90,35 +90,32 @@ take + open questions that need answers before building.
 - **Open question**: anything else the user wants surfaced (git branch,
   uptime, daemon version, …)?
 
-### 8. Broadcast send to multiple sessions
+### 8. Broadcast send to multiple sessions ✅ SHIPPED
 
 A first-class feature unique to blemees-tui (no Claude Code analogue) —
 type a message once and dispatch it to every session you care about.
 
-- **Default mechanic**: per-session "marked" flag toggled from the
-  sidebar (proposed key: `m`, or click). Plain `Enter` sends to active
-  only; `Ctrl+Enter` sends to every marked session.
-- **Visual**: marks show as a glyph next to the session row (proposed
-  `◆`); composer shows `[Ctrl+Enter → N sessions]` hint when marks exist.
-- **Recipient filtering**: only OWNED sessions; WATCHING / CRASHED /
-  CLOSED / DETACHED skipped silently with a footer count.
-- **Busy recipients** (`turn_active=True`): re-use existing
-  `pending_sends` queue — message lands when the current turn ends.
-- **Slash commands**: blocked from broadcasting (`/clear` to N sessions
-  is a foot-gun); composer text starting with `/` or `:` is a no-op +
-  hint.
-- **Open questions**:
-  - Marks vs. a toggleable "broadcast mode"? Default: marks.
-  - Empty-marked-set default for `Ctrl+Enter`: (A) blast all OWNED
-    sessions or (B) no-op with hint? Default: B.
-  - Mark UI: keybinding from the sidebar, click, or both? Default: both.
-  - Per-session response visualization stays as today (active shows,
-    others run in background) or add a split-screen compare view?
-    Default: stays as today; split-screen is much bigger work.
-  - Persistence: marks survive TUI restart (saved in `sessions.json`) or
-    reset per launch? Default: persist.
-  - Slash commands: hard block (default) or allow with explicit
-    confirmation modal?
+**Final mechanic** (replaces the original `Ctrl+Enter` proposal — that
+key combo isn't reliably delivered by terminals):
+
+- Per-session "marked" flag, toggled via:
+  - `m` keybinding (when composer isn't focused)
+  - `:mark` TUI command (toggles active session)
+  - `:mark all` / `:mark clear` (batch)
+- A composer message starting with `>> ` (note the trailing space) is
+  fanned out to every marked OWNED session. Plain `Enter` sends.
+- Sidebar shows `◆` in `$accent` next to marked rows.
+- WATCHING / CRASHED / CLOSED / DETACHED sessions are silently
+  excluded; the event-log entry reports the count.
+- Busy recipients (`turn_active=True`) are queued via the existing
+  `pending_sends` flush.
+- Slash and `:` commands inside `>>` are hard-blocked.
+- Marks persist across TUI restarts via `sessions.json` and the
+  per-session snapshot.
+
+Implemented in `app.py:_broadcast` + `widgets/sidebar.py` + state /
+persistence / commands plumbing. Tests in `test_persistence.py`,
+`test_snapshot.py`, `test_commands.py`.
 
 ### 9. Subagent visual nesting + attaching to subagent sessions
 

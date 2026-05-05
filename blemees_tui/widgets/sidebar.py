@@ -45,9 +45,12 @@ class SidebarWidget(Widget):
             icon = _mode_icon(sess.mode)
             label = sess.title or sid[:8]
             busy = sess.turn_active
-            row = f"  {idx} {icon} {label}"
+            # Leading mark glyph (◆ when marked for ``>>`` broadcast,
+            # space gap otherwise so all rows align).
+            mark = "[$accent]◆[/]" if sess.marked else " "
+            row = f"{mark} {idx} {icon} {label}"
             if sid == active_id:
-                row = f"[reverse] {idx} [/] {icon} {label}"
+                row = f"{mark} [reverse] {idx} [/] {icon} {label}"
             if busy:
                 # Yellow tint signals "agent is working" without the noise
                 # of an extra glyph.

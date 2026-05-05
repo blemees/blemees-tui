@@ -68,8 +68,8 @@ blemees --socket /path/to/blemeesd.sock
 |---|---|
 | New session | `Ctrl+N` |
 | Attach to existing (watch) | `Ctrl+T` |
-| Switch session | `Ctrl+1`–`Ctrl+9`, `Ctrl+0` (= 10), `Ctrl+Tab` |
-| Switch to session ≥ 11 | `:select 12` |
+| Switch session | `F1`–`F12`, `Ctrl+Tab` |
+| Switch to session ≥ 13 | `:select 13` |
 | Close current session | `Ctrl+W` |
 | Delete current session | `Ctrl+Shift+W` |
 | Interrupt turn | `Ctrl+C` |

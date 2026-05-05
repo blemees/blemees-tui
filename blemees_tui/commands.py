@@ -11,18 +11,41 @@ Code skills and Codex slash commands are forwarded verbatim.
 Supported commands:
 
 * ``:new`` — open the new-session modal.
-* ``:close`` — close the active session (no delete).
-* ``:delete`` — close + delete the active session.
-* ``:interrupt`` — interrupt the active session's turn.
-* ``:rename <title>`` — rename the active session.
-* ``:cwd <path>`` — relabel the active session's cwd in the UI (does not
-  rebind the backend's cwd; that needs a fresh session).
-* ``:model <name>`` — relabel the active session's model in the UI.
+* ``:close [N N …]`` — close the listed sessions (1-indexed). Empty
+  arg = the active session.
+* ``:delete [N N …]`` — close + delete. Same arg conventions.
+* ``:interrupt [N N …]`` — interrupt the listed sessions' turns.
+* ``:rename [N N …] <title>`` — rename. Without leading indices, applies
+  to the active session.
+* ``:cwd [N N …] <path>`` — relabel cwd in the UI (does not rebind the
+  backend's cwd; that needs a fresh session).
+* ``:model [N N …] <name>`` — relabel the model in the UI.
 * ``:watch <session-id>`` — open a watch on the given UUID.
 * ``:select <N>`` — switch to session number N (1-indexed; for sessions
-  past Ctrl+0/10 where the digit shortcuts run out).
+  past F12 where the function-key shortcuts run out).
+* ``:mark [N N …]`` — toggle the broadcast mark on the listed sessions
+  (or the active one if no indices are given).
+* ``:mark all`` / ``:mark clear`` — batch helpers (mark every OWNED
+  session / clear every mark).
 * ``:help`` — open the help overlay.
 * ``:q`` / ``:quit`` — quit the app.
+
+A composer message starting with ``>> `` (note the trailing space) is
+fanned out to every marked session instead of going only to the active
+one.
+
+All session-specific commands accept a leading list of 1-indexed
+session numbers:
+
+* Action commands (``:close``, ``:delete``, ``:interrupt``, ``:mark``)
+  take ``[N N …]`` only.
+* Value commands (``:rename``, ``:cwd``, ``:model``) take
+  ``[N N …] <value>`` — leading numerics are indices, the remainder is
+  the value. ``:rename hi`` applies ``hi`` to the active session;
+  ``:rename 1 3 hi`` applies it to sessions 1 and 3.
+
+Bad indices (non-numeric or out of range) are logged to the event
+overlay; the rest still execute.
 
 Unknown commands return ``Command(name, raw, is_unknown=True)`` so the
 app can surface a hint instead of silently swallowing the input.
@@ -59,6 +82,7 @@ _KNOWN = {
     "model",
     "watch",
     "select",
+    "mark",
     "help",
     "q",
     "quit",

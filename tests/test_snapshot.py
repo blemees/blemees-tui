@@ -128,6 +128,16 @@ def test_load_snapshot_schema_mismatch_returns_none(state_dir):
     assert load_snapshot("abc123") is None
 
 
+def test_marked_flag_round_trips(state_dir):
+    """Broadcast marks must survive snapshot save → load."""
+    sess = _populated_session()
+    sess.marked = True
+    save_snapshot(sess)
+    restored = load_snapshot(sess.session_id)
+    assert restored is not None
+    assert restored.marked is True
+
+
 def test_transient_fields_are_not_persisted():
     """Replay markers, pending_errors etc. must not leak to disk — they're
     rebuilt from incoming frames on next attach."""

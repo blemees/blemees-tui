@@ -148,6 +148,118 @@ async def test_scene_replay_gap_banner(isolated_state_dir):
 
 
 @pytest.mark.asyncio
+async def test_resolve_session_indices_parses_list(isolated_state_dir):
+    """Multi-target action commands depend on parsing
+    space-separated 1-indexed session numbers from the ``:`` arg."""
+    app = BlemeesTuiApp()
+    async with app.run_test():
+        # Seed three sessions in known order.
+        for label in ("a", "b", "c"):
+            sid = f"sess-{label}"
+            app.state.sessions[sid] = SessionState(
+                session_id=sid, backend="claude", title=label, mode=SessionMode.OWNED
+            )
+
+        # Empty arg → active session (or empty when none active).
+        ids, errs = app._resolve_session_indices("")
+        assert ids == [] and errs == []
+        app.state.active_session_id = "sess-b"
+        ids, errs = app._resolve_session_indices("")
+        assert ids == ["sess-b"] and errs == []
+
+        # Single index.
+        ids, errs = app._resolve_session_indices("1")
+        assert ids == ["sess-a"] and errs == []
+
+        # Multiple indices preserve order.
+        ids, errs = app._resolve_session_indices("3 1")
+        assert ids == ["sess-c", "sess-a"] and errs == []
+
+        # Mixed valid + invalid: collects errors, still returns the valid.
+        ids, errs = app._resolve_session_indices("2 99 foo 3")
+        assert ids == ["sess-b", "sess-c"]
+        assert any("99" in e for e in errs)
+        assert any("foo" in e for e in errs)
+
+
+@pytest.mark.asyncio
+async def test_split_indices_and_value_for_value_commands(isolated_state_dir):
+    """Value commands (``:rename``, ``:cwd``, ``:model``) parse leading
+    numeric tokens as session indices and the rest as the value."""
+    app = BlemeesTuiApp()
+    async with app.run_test():
+        for label in ("a", "b", "c"):
+            sid = f"sess-{label}"
+            app.state.sessions[sid] = SessionState(
+                session_id=sid, backend="claude", title=label, mode=SessionMode.OWNED
+            )
+
+        # Empty arg → empty everything.
+        ids, errs, val = app._split_indices_and_value("")
+        assert ids == [] and errs == [] and val == ""
+
+        # No leading numerics → active gets the whole arg as value.
+        app.state.active_session_id = "sess-b"
+        ids, errs, val = app._split_indices_and_value("hello world")
+        assert ids == ["sess-b"] and errs == [] and val == "hello world"
+
+        # Leading indices + value.
+        ids, errs, val = app._split_indices_and_value("1 3 my new title")
+        assert ids == ["sess-a", "sess-c"]
+        assert errs == []
+        assert val == "my new title"
+
+        # Out-of-range index recorded as error; valid ones still resolve.
+        ids, errs, val = app._split_indices_and_value("1 99 hi")
+        assert ids == ["sess-a"]
+        assert any("99" in e for e in errs)
+        assert val == "hi"
+
+
+@pytest.mark.asyncio
+async def test_rename_command_with_indices(isolated_state_dir):
+    """`:rename 1 3 my title` retitles sessions 1 and 3."""
+    app = BlemeesTuiApp()
+    async with app.run_test():
+        for label in ("a", "b", "c"):
+            sid = f"sess-{label}"
+            app.state.sessions[sid] = SessionState(
+                session_id=sid, backend="claude", title=label, mode=SessionMode.OWNED
+            )
+
+        from blemees_tui.commands import parse as parse_command
+
+        await app._dispatch_command(parse_command(":rename 1 3 my title"))
+        assert app.state.sessions["sess-a"].title == "my title"
+        assert app.state.sessions["sess-b"].title == "b"  # untouched
+        assert app.state.sessions["sess-c"].title == "my title"
+
+
+@pytest.mark.asyncio
+async def test_mark_command_with_indices_toggles_listed_sessions(isolated_state_dir):
+    """`:mark 1 3` toggles the broadcast mark on sessions 1 and 3."""
+    app = BlemeesTuiApp()
+    async with app.run_test():
+        for label in ("a", "b", "c"):
+            sid = f"sess-{label}"
+            app.state.sessions[sid] = SessionState(
+                session_id=sid, backend="claude", title=label, mode=SessionMode.OWNED
+            )
+
+        from blemees_tui.commands import parse as parse_command
+
+        await app._dispatch_command(parse_command(":mark 1 3"))
+        assert app.state.sessions["sess-a"].marked is True
+        assert app.state.sessions["sess-b"].marked is False
+        assert app.state.sessions["sess-c"].marked is True
+
+        # Toggle again → both flip back to False.
+        await app._dispatch_command(parse_command(":mark 1 3"))
+        assert app.state.sessions["sess-a"].marked is False
+        assert app.state.sessions["sess-c"].marked is False
+
+
+@pytest.mark.asyncio
 async def test_scene_event_log_overlay_opens(isolated_state_dir):
     app = BlemeesTuiApp()
     async with app.run_test() as pilot:

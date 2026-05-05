@@ -59,3 +59,22 @@ def test_completions():
     assert ":new" in completions(":n")
     assert completions("hello") == []
     assert completions("/c") == []
+
+
+def test_mark_command_known():
+    """Broadcast-mark verbs (``:mark``, ``:mark all``, ``:mark clear``)
+    parse as a known command and the arg is preserved."""
+    assert parse(":mark").name == "mark"
+    assert parse(":mark").arg == ""
+    assert not parse(":mark").is_unknown
+
+    cmd_all = parse(":mark all")
+    assert cmd_all is not None
+    assert cmd_all.name == "mark"
+    assert cmd_all.arg == "all"
+
+    cmd_clear = parse(":mark clear")
+    assert cmd_clear is not None
+    assert cmd_clear.arg == "clear"
+
+    assert ":mark" in completions(":m")

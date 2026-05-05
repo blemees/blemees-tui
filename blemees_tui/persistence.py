@@ -106,6 +106,7 @@ class StoredSession:
     last_seen_seq: int
     last_active_at_ms: int
     mode: str  # "owned" | "watching" — closed sessions live in history.json
+    marked: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -118,6 +119,7 @@ class StoredSession:
             "last_seen_seq": self.last_seen_seq,
             "last_active_at_ms": self.last_active_at_ms,
             "mode": self.mode,
+            "marked": self.marked,
         }
 
     @classmethod
@@ -132,6 +134,7 @@ class StoredSession:
             last_seen_seq=int(raw.get("last_seen_seq", 0)),
             last_active_at_ms=int(raw.get("last_active_at_ms", 0)),
             mode=str(raw.get("mode", "owned")),
+            marked=bool(raw.get("marked", False)),
         )
 
 

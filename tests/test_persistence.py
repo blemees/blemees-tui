@@ -39,6 +39,7 @@ def test_sessions_round_trip(tmp_path: Path):
             last_seen_seq=42,
             last_active_at_ms=1700000000000,
             mode="owned",
+            marked=True,
         )
     ]
     save_sessions(rows, p)
@@ -47,6 +48,22 @@ def test_sessions_round_trip(tmp_path: Path):
     assert loaded[0].session_id == "s1"
     assert loaded[0].last_seen_seq == 42
     assert loaded[0].options == {"x": 1}
+    assert loaded[0].marked is True
+
+
+def test_sessions_load_defaults_marked_to_false_for_old_files(tmp_path: Path):
+    """sessions.json files written before the broadcast feature shipped
+    don't carry a ``marked`` field. Loader must default it cleanly."""
+    p = tmp_path / "sessions.json"
+    p.write_text(
+        '{"version": 1, "sessions": [{"session_id": "s1", "backend": "claude", '
+        '"model": "", "cwd": "", "title": "", "options": {}, "last_seen_seq": 0, '
+        '"last_active_at_ms": 0, "mode": "owned"}]}',
+        encoding="utf-8",
+    )
+    loaded = load_sessions(p)
+    assert len(loaded) == 1
+    assert loaded[0].marked is False
 
 
 def test_history_is_bounded(tmp_path: Path):

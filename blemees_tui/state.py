@@ -136,6 +136,9 @@ class SessionState:
     # progress that doesn't look weird on warm reconnects (where we start
     # 95% of the way through).
     replay_start_seq: int = 0
+    # Marked for broadcast — a ``>> message`` typed in the composer fans
+    # out to every session with this flag set. Persisted across restarts.
+    marked: bool = False
 
 
 # ---------------------------------------------------------------------------

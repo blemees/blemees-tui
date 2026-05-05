@@ -261,6 +261,15 @@ class ChatPaneWidget(Widget):
     ChatPaneWidget #watch-banner { dock: top; height: auto; width: 100%; padding: 0 2; }
     ChatPaneWidget #watch-buttons { dock: bottom; height: 3; width: 100%; padding: 0 2; }
     ChatPaneWidget #watch-buttons Button { margin-right: 2; }
+    ChatPaneWidget #tail-indicator {
+        dock: bottom;
+        height: 1;
+        width: 100%;
+        padding: 0 2;
+        background: $warning;
+        color: black;
+    }
+    ChatPaneWidget #tail-indicator.-hidden { display: none; }
     """
 
     class TakeOwnership(Message):
@@ -295,6 +304,14 @@ class ChatPaneWidget(Widget):
         self._errors_widget: Static | None = None
         self._gap_widget: Static | None = None
         self._replay_widget: Static | None = None
+        # Tailing state — when True (default), new turns auto-scroll into
+        # view; when False the user has scrolled up and we leave the view
+        # alone, surfacing a "paused" indicator at the bottom of the pane.
+        self._tailing: bool = True
+        # Count of new turns that landed while paused — surfaced in the
+        # indicator so the user knows there's content waiting below.
+        self._paused_new_turns: int = 0
+        self._last_turn_count: int = 0
 
     def compose(self) -> ComposeResult:
         scroll = VerticalScroll(id="chat-scroll")
@@ -304,6 +321,10 @@ class ChatPaneWidget(Widget):
         # on the composer in a single press.
         scroll.can_focus = False
         yield scroll
+        # Tailing-paused strip. Hidden when tailing; visible with a
+        # warning background while the user has scrolled away from the
+        # bottom and new turns are landing.
+        yield Static("", id="tail-indicator", classes="-hidden")
 
     def set_show_thinking(self, value: bool) -> None:
         if value == self._show_thinking:
@@ -323,11 +344,18 @@ class ChatPaneWidget(Widget):
         scroll = self.query_one("#chat-scroll", VerticalScroll)
 
         # Switching sessions → reset bookkeeping and remount.
-        if force or session is None or session.session_id != self._session_id:
+        switched = (
+            force or session is None or session.session_id != self._session_id
+        )
+        if switched:
             scroll.remove_children()
             self._turn_widgets = []
             self._empty_state = None
             self._session_id = session.session_id if session is not None else None
+            # New session always starts tailed.
+            self._tailing = True
+            self._paused_new_turns = 0
+            self._last_turn_count = 0
 
         self._session_ref = session
 
@@ -337,7 +365,15 @@ class ChatPaneWidget(Widget):
                     "[dim]No session selected — press Ctrl+N to create one.[/]"
                 )
                 scroll.mount(self._empty_state)
+            self._update_tail_indicator()
             return
+
+        # Track new turns landing while paused so the indicator can
+        # surface "N new" — only count growth, not reductions or resets.
+        new_turns = max(0, len(session.turns) - self._last_turn_count)
+        if new_turns and not self._tailing:
+            self._paused_new_turns += new_turns
+        self._last_turn_count = len(session.turns)
 
         # Mount widgets for any new turns.
         while len(self._turn_widgets) < len(session.turns):
@@ -364,12 +400,15 @@ class ChatPaneWidget(Widget):
         # Inline error bubbles for session-scoped errors (§9.8).
         self._sync_errors(session, scroll)
 
-        # Auto-scroll the latest turn into view. Mounts are async — the
-        # widgets have height 0 until the next layout pass, so scrolling
-        # right now would clamp to ~0 and stay at the top. Defer until
-        # after the next refresh.
-        if self._turn_widgets:
+        # Auto-scroll the latest turn into view *only* when tailing.
+        # Mounts are async — the widgets have height 0 until the next
+        # layout pass, so scrolling right now would clamp to ~0 and stay
+        # at the top. Defer until after the next refresh.
+        if self._turn_widgets and self._tailing:
             self.call_after_refresh(scroll.scroll_end, animate=False)
+
+        # Refresh the paused indicator (counter, visibility).
+        self._update_tail_indicator()
 
         # Banner / button row for non-owned modes.
         self._sync_banner(session)
@@ -379,22 +418,83 @@ class ChatPaneWidget(Widget):
     # ------------------------------------------------------------------
 
     def scroll_up_page(self) -> None:
+        self._set_tailing(False)
         self.query_one("#chat-scroll", VerticalScroll).scroll_page_up(animate=False)
 
     def scroll_down_page(self) -> None:
-        self.query_one("#chat-scroll", VerticalScroll).scroll_page_down(animate=False)
+        scroll = self.query_one("#chat-scroll", VerticalScroll)
+        scroll.scroll_page_down(animate=False)
+        # If the page-down brought us to the bottom, resume tailing.
+        self.call_after_refresh(self._maybe_resume_tailing)
 
     def scroll_up_line(self) -> None:
+        self._set_tailing(False)
         self.query_one("#chat-scroll", VerticalScroll).scroll_relative(y=-1, animate=False)
 
     def scroll_down_line(self) -> None:
-        self.query_one("#chat-scroll", VerticalScroll).scroll_relative(y=1, animate=False)
+        scroll = self.query_one("#chat-scroll", VerticalScroll)
+        scroll.scroll_relative(y=1, animate=False)
+        self.call_after_refresh(self._maybe_resume_tailing)
 
     def scroll_to_top(self) -> None:
+        self._set_tailing(False)
         self.query_one("#chat-scroll", VerticalScroll).scroll_home(animate=False)
 
     def scroll_to_bottom(self) -> None:
         self.query_one("#chat-scroll", VerticalScroll).scroll_end(animate=False)
+        self._set_tailing(True)
+
+    # ------------------------------------------------------------------
+    # Tailing state
+    # ------------------------------------------------------------------
+
+    def _set_tailing(self, value: bool) -> None:
+        if value == self._tailing:
+            return
+        self._tailing = value
+        if value:
+            self._paused_new_turns = 0
+        self._update_tail_indicator()
+
+    def _maybe_resume_tailing(self) -> None:
+        """Resume tailing if a scroll-down landed us at (or within 1 row
+        of) the bottom of the chat pane."""
+        try:
+            scroll = self.query_one("#chat-scroll", VerticalScroll)
+        except Exception:
+            return
+        if scroll.scroll_y >= scroll.max_scroll_y - 0.5:
+            self._set_tailing(True)
+
+    def _update_tail_indicator(self) -> None:
+        try:
+            ind = self.query_one("#tail-indicator", Static)
+        except Exception:
+            return
+        if self._tailing:
+            ind.add_class("-hidden")
+            return
+        ind.remove_class("-hidden")
+        text = "[b]⏸ Paused[/]"
+        if self._paused_new_turns > 0:
+            label = "turn" if self._paused_new_turns == 1 else "turns"
+            text += f"  ·  {self._paused_new_turns} new {label}"
+        text += "  ·  End / PgDn to resume tailing"
+        ind.update(text)
+
+    # ------------------------------------------------------------------
+    # Mouse-wheel handling
+    # ------------------------------------------------------------------
+
+    def on_mouse_scroll_up(self, _event) -> None:  # noqa: ANN001
+        # Wheel-up is the "scroll back through history" gesture — pause
+        # tailing immediately so new turns don't yank the view downward.
+        self._set_tailing(False)
+
+    def on_mouse_scroll_down(self, _event) -> None:  # noqa: ANN001
+        # Wheel-down might bring the user back to the bottom. Defer the
+        # check until the scroll has actually applied.
+        self.call_after_refresh(self._maybe_resume_tailing)
 
     def _sync_replay_gap(self, session: SessionState, scroll: VerticalScroll) -> None:
         if not session.replay_gap:

@@ -7,6 +7,28 @@ project tracks [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **Multi-target session commands.** Every session-specific TUI command
+  now accepts a leading list of 1-indexed session numbers — empty falls
+  back to the active session. Action commands (`:close`, `:delete`,
+  `:interrupt`, `:mark`) take `:close 1 3 5` etc. Value commands
+  (`:rename`, `:cwd`, `:model`) take `:rename 1 3 my title` — leading
+  numerics are indices, the remainder is the value. Bad indices are
+  logged to the event overlay; valid ones still execute.
+- **Tailing modes for the chat pane.** New turns auto-scroll into view
+  by default. Scroll up (PgUp, `Ctrl+↑`, Home, mouse wheel) and tailing
+  pauses — new turns append silently while you're reading. A warning
+  strip docks at the bottom of the chat pane: `⏸ Paused · 3 new turns ·
+  End / PgDn to resume tailing`. Press `End` (or scroll back to bottom
+  via PgDn / wheel) to resume.
+- **Broadcast send to multiple sessions.** Mark sessions with `m` (or
+  `:mark`, `:mark all`, `:mark clear`); start a composer message with
+  `>> ` to fan it out to every marked session. Marks survive restarts.
+  Sidebar shows a `◆` glyph next to marked sessions. Slash/`:` commands
+  are blocked from broadcasting; busy recipients queue via
+  `pending_sends`.
+- F1–F12 bindings for sessions 1–12 (universal terminal support).
+- `Ctrl+J` insert-newline binding in the composer (works in every
+  terminal, replacing the unreliable `Shift+Enter` / `Cmd+Enter`).
 - Per-session snapshot persistence (`snapshots/<session-id>.json`) — TUI
   restart paints the sidebar instantly from cache and the daemon only
   replays frames since the last save (`blemees_tui/snapshot.py`).

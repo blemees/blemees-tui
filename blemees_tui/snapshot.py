@@ -102,6 +102,7 @@ def session_to_dict(sess: SessionState) -> dict[str, Any]:
         "started_at_ms": sess.started_at_ms,
         "owner_pid": sess.owner_pid,
         "draft": sess.draft,
+        "marked": sess.marked,
     }
 
 
@@ -193,6 +194,7 @@ def session_from_dict(d: dict[str, Any]) -> SessionState | None:
         started_at_ms=int(d.get("started_at_ms", 0) or 0),
         owner_pid=d.get("owner_pid") if isinstance(d.get("owner_pid"), int) else None,
         draft=str(d.get("draft", "") or ""),
+        marked=bool(d.get("marked", False)),
     )
     return sess
 

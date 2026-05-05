@@ -94,14 +94,15 @@ class BlemeesTuiApp(App):
         Binding("ctrl+s", "save_transcript", "Save transcript"),
         Binding("ctrl+tab", "next_session", "Next session", show=False),
         Binding("ctrl+shift+tab", "prev_session", "Prev session", show=False),
-        # Ctrl+1..Ctrl+9 → sessions 1-9; Ctrl+0 → session 10. Past that,
-        # Ctrl+Tab cycles. Bare digits are left for the composer.
+        # F1..F12 → sessions 1-12. Function keys are universally delivered
+        # to the app (no kitty-protocol or terminal-config gymnastics
+        # needed). Past 12, Ctrl+Tab cycles or use ``:select N``.
         *[
-            Binding(f"ctrl+{i}", f"select_session({i})", f"Session {i}", show=False)
-            for i in range(1, 10)
+            Binding(f"f{i}", f"select_session({i})", f"Session {i}", show=False)
+            for i in range(1, 13)
         ],
-        Binding("ctrl+0", "select_session(10)", "Session 10", show=False),
         Binding("t", "toggle_thinking", "Toggle thinking", show=False),
+        Binding("m", "toggle_mark", "Mark / unmark for broadcast", show=False),
         Binding("colon", "focus_composer_command", "Command", show=False),
         # Chat scroll — priority so they fire even when the composer's
         # TextArea has focus (TextArea claims pageup/pagedown/home/end by
@@ -196,6 +197,10 @@ class BlemeesTuiApp(App):
                 cached.last_active_at_ms = max(
                     cached.last_active_at_ms, stored.last_active_at_ms
                 )
+                # The metadata row is the more recent source for marks
+                # (rewritten on every change), so prefer it over the
+                # snapshot's value.
+                cached.marked = stored.marked
                 self.state.sessions[cached.session_id] = cached
             else:
                 self.state.sessions[stored.session_id] = SessionState(
@@ -208,6 +213,7 @@ class BlemeesTuiApp(App):
                     last_seen_seq=stored.last_seen_seq,
                     last_active_at_ms=stored.last_active_at_ms,
                     mode=SessionMode(stored.mode) if stored.mode else SessionMode.OWNED,
+                    marked=stored.marked,
                 )
 
         self._connection = Connection(
@@ -526,6 +532,7 @@ class BlemeesTuiApp(App):
                     last_seen_seq=sess.last_seen_seq,
                     last_active_at_ms=sess.last_active_at_ms,
                     mode=sess.mode.value,
+                    marked=sess.marked,
                 )
             )
         try:
@@ -573,6 +580,22 @@ class BlemeesTuiApp(App):
             composer.query_one("#composer-input").focus()
         except Exception:
             pass
+
+    def action_toggle_mark(self) -> None:
+        """Toggle the broadcast-mark on the active session.
+
+        Mark a few sessions with ``m`` (or ``:mark``), then start a
+        composer message with ``>> `` to fan it out to all of them.
+        """
+        sid = self.state.active_session_id
+        if not sid:
+            return
+        sess = self.state.sessions.get(sid)
+        if sess is None:
+            return
+        sess.marked = not sess.marked
+        self._persist_sessions()
+        self._refresh_ui()
 
     def action_focus_composer_command(self) -> None:
         """Focus the composer with ``:`` already typed (vim-style)."""
@@ -689,12 +712,25 @@ class BlemeesTuiApp(App):
 
     async def action_interrupt(self) -> None:
         sid = self.state.active_session_id
-        if sid and self._connection is not None:
+        if sid is not None:
+            await self._interrupt_session(sid)
+
+    async def _interrupt_session(self, sid: str) -> None:
+        if self._connection is not None:
             await self._connection.interrupt(sid)
 
     async def _close_active(self, *, delete: bool) -> None:
         sid = self.state.active_session_id
-        if not sid or self._connection is None:
+        if sid is None:
+            return
+        await self._close_session_by_id(sid, delete=delete)
+        self._refresh_ui()
+
+    async def _close_session_by_id(self, sid: str, *, delete: bool) -> None:
+        """Close (or delete) a single session by id. Used both by the
+        active-session keybindings and the multi-target ``:close`` /
+        ``:delete`` commands."""
+        if self._connection is None:
             return
         sess = self.state.sessions.get(sid)
         try:
@@ -707,9 +743,92 @@ class BlemeesTuiApp(App):
                 )
             self.state.sessions.pop(sid, None)
             delete_snapshot(sid)
-            self._set_active_session(None)
+            if self.state.active_session_id == sid:
+                self._set_active_session(None)
             self._persist_sessions()
-            self._refresh_ui()
+
+    def _resolve_session_indices(
+        self, arg: str
+    ) -> tuple[list[str], list[str]]:
+        """Parse a space-separated list of 1-indexed session numbers into
+        ``(session_ids, errors)``.
+
+        Empty arg falls back to ``[active_session_id]`` (or ``[]`` if
+        nothing's active). Non-numeric or out-of-range tokens are
+        collected as human-readable error strings so the caller can log
+        them and still proceed with the resolved entries.
+        """
+        arg = (arg or "").strip()
+        if not arg:
+            sid = self.state.active_session_id
+            return ([sid] if sid else []), []
+
+        ids_in_order = list(self.state.sessions.keys())
+        resolved: list[str] = []
+        errors: list[str] = []
+        for token in arg.split():
+            try:
+                n = int(token)
+            except ValueError:
+                errors.append(f"invalid session index: {token!r}")
+                continue
+            if not (1 <= n <= len(ids_in_order)):
+                errors.append(f"session index out of range: {n}")
+                continue
+            resolved.append(ids_in_order[n - 1])
+        return resolved, errors
+
+    def _split_indices_and_value(
+        self, arg: str
+    ) -> tuple[list[str], list[str], str]:
+        """Split a value-command arg like ``"1 3 my new title"`` into
+        leading session indices + trailing value.
+
+        Returns ``(session_ids, errors, value)``. If no leading numeric
+        tokens are present, the target defaults to the active session and
+        the entire arg becomes the value. ``"1 3 hi"`` → sessions 1 & 3,
+        value ``"hi"``. ``"hi"`` → active session, value ``"hi"``. An
+        empty arg → empty ids, empty errors, empty value.
+
+        Quirk: a value that is itself a bare integer (e.g. ``:rename 5``)
+        is interpreted as an index, not a value. Lead with a non-digit
+        character if you really want to set the title to ``"5"``.
+        """
+        arg = (arg or "").strip()
+        if not arg:
+            return [], [], ""
+
+        tokens = arg.split()
+        numeric_prefix = 0
+        for token in tokens:
+            try:
+                int(token)
+                numeric_prefix += 1
+            except ValueError:
+                break
+
+        if numeric_prefix == 0:
+            sid = self.state.active_session_id
+            return ([sid] if sid else []), [], arg
+
+        ids_in_order = list(self.state.sessions.keys())
+        resolved: list[str] = []
+        errors: list[str] = []
+        for token in tokens[:numeric_prefix]:
+            n = int(token)
+            if not (1 <= n <= len(ids_in_order)):
+                errors.append(f"session index out of range: {n}")
+                continue
+            resolved.append(ids_in_order[n - 1])
+
+        value = " ".join(tokens[numeric_prefix:])
+        return resolved, errors, value
+
+    def _log_command_errors(self, errors: list[str]) -> None:
+        for err in errors:
+            self.state.event_log.append(
+                EventLogSource.TUI_INTERNAL, "command", err
+            )
 
     def _archive_to_history(self, sess: SessionState, *, reason: str) -> None:
         record = HistoryRecord(
@@ -905,6 +1024,13 @@ class BlemeesTuiApp(App):
             pass
 
     async def on_composer_widget_submit(self, msg: ComposerWidget.Submit) -> None:
+        # `>> message` fans out to every marked session. Strip the prefix
+        # before sending. Detected before slash/`:` parsing so the broadcast
+        # path doesn't pick up TUI commands by accident.
+        if msg.text.startswith(">> "):
+            await self._broadcast(msg.text[3:])
+            return
+
         cmd = parse_command(msg.text)
         if cmd is not None and not cmd.is_unknown:
             await self._dispatch_command(cmd)
@@ -930,6 +1056,65 @@ class BlemeesTuiApp(App):
             self._refresh_ui()
             return
         await self._send_user_message(sid, msg.text)
+
+    async def _broadcast(self, text: str) -> None:
+        """Fan a message out to every marked OWNED session.
+
+        WATCHING / CRASHED / CLOSED / DETACHED sessions are silently
+        excluded. Busy recipients get the message queued via the existing
+        ``pending_sends`` flush path so it lands when their current turn
+        ends. Slash and TUI-command broadcasts are blocked — too easy a
+        foot-gun.
+        """
+        body = text.strip()
+        if not body:
+            return
+        if body.startswith(("/", ":")):
+            self.state.event_log.append(
+                EventLogSource.TUI_INTERNAL,
+                "broadcast",
+                f"slash/colon commands don't broadcast (blocked: {body[:32]!r})",
+            )
+            return
+
+        recipients: list[SessionState] = [
+            s
+            for s in self.state.sessions.values()
+            if s.marked and s.mode == SessionMode.OWNED
+        ]
+        if not recipients:
+            self.state.event_log.append(
+                EventLogSource.TUI_INTERNAL,
+                "broadcast",
+                "no marked sessions — press `m` (or `:mark`) on the sessions you want",
+            )
+            return
+
+        skipped = sum(
+            1
+            for s in self.state.sessions.values()
+            if s.marked and s.mode != SessionMode.OWNED
+        )
+        sent = 0
+        queued = 0
+        for sess in recipients:
+            if sess.turn_active:
+                sess.pending_sends.append(body)
+                queued += 1
+            else:
+                await self._send_user_message(sess.session_id, body)
+                sent += 1
+
+        bits = [f"sent to {sent}"] if sent else []
+        if queued:
+            bits.append(f"queued for {queued}")
+        if skipped:
+            bits.append(f"skipped {skipped} non-owned")
+        summary = " · ".join(bits) if bits else "no recipients"
+        self.state.event_log.append(
+            EventLogSource.TUI_INTERNAL, "broadcast", summary
+        )
+        self._refresh_ui()
 
     async def _send_user_message(self, sid: str, text: str) -> None:
         if self._connection is None:
@@ -962,21 +1147,58 @@ class BlemeesTuiApp(App):
         elif cmd.name in ("q", "quit"):
             self.exit()
         elif cmd.name == "close":
-            await self.action_close_session()
+            ids, errors = self._resolve_session_indices(cmd.arg)
+            self._log_command_errors(errors)
+            for target_sid in ids:
+                await self._close_session_by_id(target_sid, delete=False)
+            if ids:
+                self._refresh_ui()
         elif cmd.name == "delete":
-            await self.action_delete_session()
+            ids, errors = self._resolve_session_indices(cmd.arg)
+            self._log_command_errors(errors)
+            for target_sid in ids:
+                await self._close_session_by_id(target_sid, delete=True)
+            if ids:
+                self._refresh_ui()
         elif cmd.name == "interrupt":
-            await self.action_interrupt()
-        elif cmd.name == "rename" and sess is not None:
-            sess.title = cmd.arg.strip()
-            self._persist_sessions()
-            self._refresh_ui()
-        elif cmd.name == "cwd" and sess is not None:
-            sess.cwd = cmd.arg.strip()
-            self._refresh_ui()
-        elif cmd.name == "model" and sess is not None:
-            sess.model = cmd.arg.strip()
-            self._refresh_ui()
+            ids, errors = self._resolve_session_indices(cmd.arg)
+            self._log_command_errors(errors)
+            for target_sid in ids:
+                await self._interrupt_session(target_sid)
+        elif cmd.name == "rename":
+            ids, errors, value = self._split_indices_and_value(cmd.arg)
+            self._log_command_errors(errors)
+            changed = False
+            for target_sid in ids:
+                target = self.state.sessions.get(target_sid)
+                if target is not None:
+                    target.title = value
+                    changed = True
+            if changed:
+                self._persist_sessions()
+                self._refresh_ui()
+        elif cmd.name == "cwd":
+            ids, errors, value = self._split_indices_and_value(cmd.arg)
+            self._log_command_errors(errors)
+            changed = False
+            for target_sid in ids:
+                target = self.state.sessions.get(target_sid)
+                if target is not None:
+                    target.cwd = value
+                    changed = True
+            if changed:
+                self._refresh_ui()
+        elif cmd.name == "model":
+            ids, errors, value = self._split_indices_and_value(cmd.arg)
+            self._log_command_errors(errors)
+            changed = False
+            for target_sid in ids:
+                target = self.state.sessions.get(target_sid)
+                if target is not None:
+                    target.model = value
+                    changed = True
+            if changed:
+                self._refresh_ui()
         elif cmd.name == "select":
             arg = cmd.arg.strip()
             try:
@@ -989,6 +1211,32 @@ class BlemeesTuiApp(App):
                 )
                 return
             self.action_select_session(index)
+        elif cmd.name == "mark":
+            arg_lower = cmd.arg.strip().lower()
+            if arg_lower == "all":
+                for s in self.state.sessions.values():
+                    if s.mode == SessionMode.OWNED:
+                        s.marked = True
+                self._persist_sessions()
+                self._refresh_ui()
+            elif arg_lower in ("clear", "none"):
+                for s in self.state.sessions.values():
+                    s.marked = False
+                self._persist_sessions()
+                self._refresh_ui()
+            else:
+                # Empty arg → toggle active. Numeric tokens → toggle each.
+                ids, errors = self._resolve_session_indices(cmd.arg)
+                self._log_command_errors(errors)
+                changed = False
+                for target_sid in ids:
+                    target = self.state.sessions.get(target_sid)
+                    if target is not None:
+                        target.marked = not target.marked
+                        changed = True
+                if changed:
+                    self._persist_sessions()
+                    self._refresh_ui()
         elif cmd.name == "watch":
             target = cmd.arg.strip()
             if is_command_uuid(target) and self._connection is not None:

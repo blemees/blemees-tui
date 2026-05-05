@@ -29,6 +29,12 @@ class ComposerInput(TextArea):
 
     BINDINGS = [
         Binding("enter", "submit", show=False, priority=True),
+        # Newline insertion — Shift+Enter and Cmd+Enter aren't delivered as
+        # distinct keys by most terminals (default macOS Terminal in
+        # particular collapses them to plain Enter). Ctrl+J sends a literal
+        # LF byte and is universally supported, matching Claude Code's own
+        # multiline-input idiom.
+        Binding("ctrl+j", "insert_newline", show=False, priority=True),
         Binding("shift+enter", "insert_newline", show=False, priority=True),
         Binding("escape", "blur", show=False, priority=True),
         Binding("up", "history_up", show=False, priority=True),
