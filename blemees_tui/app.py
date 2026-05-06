@@ -134,7 +134,9 @@ class BlemeesTuiApp(App):
             socket=socket_override,
             log_level=log_level_override,
         )
-        configure_logger(level=self.config_obj.logging.level, keep_days=self.config_obj.logging.keep_days)
+        configure_logger(
+            level=self.config_obj.logging.level, keep_days=self.config_obj.logging.keep_days
+        )
 
         self.state = AppState()
         self._connection: Connection | None = None
@@ -194,9 +196,7 @@ class BlemeesTuiApp(App):
                 # may be a tick behind if the TUI crashed between agent.result
                 # and the metadata flush — keep the higher of the two.
                 cached.last_seen_seq = max(cached.last_seen_seq, stored.last_seen_seq)
-                cached.last_active_at_ms = max(
-                    cached.last_active_at_ms, stored.last_active_at_ms
-                )
+                cached.last_active_at_ms = max(cached.last_active_at_ms, stored.last_active_at_ms)
                 # The metadata row is the more recent source for marks
                 # (rewritten on every change), so prefer it over the
                 # snapshot's value.
@@ -234,9 +234,7 @@ class BlemeesTuiApp(App):
         # daemon kept running while the TUI was shut down).
         for sess in self.state.sessions.values():
             if sess.mode == SessionMode.WATCHING:
-                self._connection.track_watch(
-                    sess.session_id, last_seen_seq=sess.last_seen_seq
-                )
+                self._connection.track_watch(sess.session_id, last_seen_seq=sess.last_seen_seq)
             else:
                 self._connection.track_owned(
                     sess.session_id,
@@ -329,9 +327,7 @@ class BlemeesTuiApp(App):
         level = str(frame.get("level", "info"))
         text = str(frame.get("text", ""))
         data = frame.get("data") if isinstance(frame.get("data"), dict) else {}
-        self.state.event_log.append(
-            EventLogSource.NOTICE, category, text, session_id=session_id
-        )
+        self.state.event_log.append(EventLogSource.NOTICE, category, text, session_id=session_id)
         if category == "rate_limits":
             self.state.rate_limits = RateLimitsNotice(
                 level=level,
@@ -435,9 +431,7 @@ class BlemeesTuiApp(App):
             blocked = bool(active and active.mode == SessionMode.WATCHING)
             composer.set_enabled(not blocked)
             recall = (
-                [t.user_text for t in active.turns if t.user_text]
-                if active is not None
-                else []
+                [t.user_text for t in active.turns if t.user_text] if active is not None else []
             )
             composer.set_recall_history(recall)
         except Exception:
@@ -605,6 +599,7 @@ class BlemeesTuiApp(App):
             ta.focus()
             # Pre-fill with the prefix; leave the cursor after it.
             from .commands import PREFIX
+
             ta.text = PREFIX
             # ``move_cursor`` API lives on TextArea; safely best-effort.
             try:
@@ -738,18 +733,14 @@ class BlemeesTuiApp(App):
         finally:
             self._connection.untrack(sid)
             if sess is not None:
-                self._archive_to_history(
-                    sess, reason="deleted" if delete else "user_closed"
-                )
+                self._archive_to_history(sess, reason="deleted" if delete else "user_closed")
             self.state.sessions.pop(sid, None)
             delete_snapshot(sid)
             if self.state.active_session_id == sid:
                 self._set_active_session(None)
             self._persist_sessions()
 
-    def _resolve_session_indices(
-        self, arg: str
-    ) -> tuple[list[str], list[str]]:
+    def _resolve_session_indices(self, arg: str) -> tuple[list[str], list[str]]:
         """Parse a space-separated list of 1-indexed session numbers into
         ``(session_ids, errors)``.
 
@@ -778,9 +769,7 @@ class BlemeesTuiApp(App):
             resolved.append(ids_in_order[n - 1])
         return resolved, errors
 
-    def _split_indices_and_value(
-        self, arg: str
-    ) -> tuple[list[str], list[str], str]:
+    def _split_indices_and_value(self, arg: str) -> tuple[list[str], list[str], str]:
         """Split a value-command arg like ``"1 3 my new title"`` into
         leading session indices + trailing value.
 
@@ -826,9 +815,7 @@ class BlemeesTuiApp(App):
 
     def _log_command_errors(self, errors: list[str]) -> None:
         for err in errors:
-            self.state.event_log.append(
-                EventLogSource.TUI_INTERNAL, "command", err
-            )
+            self.state.event_log.append(EventLogSource.TUI_INTERNAL, "command", err)
 
     def _archive_to_history(self, sess: SessionState, *, reason: str) -> None:
         record = HistoryRecord(
@@ -907,17 +894,13 @@ class BlemeesTuiApp(App):
     # Watch / takeover button handlers (§8.4, §8.6, §7.6)
     # ------------------------------------------------------------------
 
-    async def on_chat_pane_widget_take_ownership(
-        self, msg: ChatPaneWidget.TakeOwnership
-    ) -> None:
+    async def on_chat_pane_widget_take_ownership(self, msg: ChatPaneWidget.TakeOwnership) -> None:
         await self._take_ownership(msg.session_id)
 
     async def on_chat_pane_widget_reclaim(self, msg: ChatPaneWidget.Reclaim) -> None:
         await self._take_ownership(msg.session_id)
 
-    async def on_chat_pane_widget_stop_watching(
-        self, msg: ChatPaneWidget.StopWatching
-    ) -> None:
+    async def on_chat_pane_widget_stop_watching(self, msg: ChatPaneWidget.StopWatching) -> None:
         sid = msg.session_id
         if self._connection is None:
             return
@@ -934,9 +917,7 @@ class BlemeesTuiApp(App):
             self._persist_sessions()
             self._refresh_ui()
 
-    def on_chat_pane_widget_move_to_history(
-        self, msg: ChatPaneWidget.MoveToHistory
-    ) -> None:
+    def on_chat_pane_widget_move_to_history(self, msg: ChatPaneWidget.MoveToHistory) -> None:
         sid = msg.session_id
         sess = self.state.sessions.pop(sid, None)
         delete_snapshot(sid)
@@ -1078,9 +1059,7 @@ class BlemeesTuiApp(App):
             return
 
         recipients: list[SessionState] = [
-            s
-            for s in self.state.sessions.values()
-            if s.marked and s.mode == SessionMode.OWNED
+            s for s in self.state.sessions.values() if s.marked and s.mode == SessionMode.OWNED
         ]
         if not recipients:
             self.state.event_log.append(
@@ -1091,9 +1070,7 @@ class BlemeesTuiApp(App):
             return
 
         skipped = sum(
-            1
-            for s in self.state.sessions.values()
-            if s.marked and s.mode != SessionMode.OWNED
+            1 for s in self.state.sessions.values() if s.marked and s.mode != SessionMode.OWNED
         )
         sent = 0
         queued = 0
@@ -1111,9 +1088,7 @@ class BlemeesTuiApp(App):
         if skipped:
             bits.append(f"skipped {skipped} non-owned")
         summary = " · ".join(bits) if bits else "no recipients"
-        self.state.event_log.append(
-            EventLogSource.TUI_INTERNAL, "broadcast", summary
-        )
+        self.state.event_log.append(EventLogSource.TUI_INTERNAL, "broadcast", summary)
         self._refresh_ui()
 
     async def _send_user_message(self, sid: str, text: str) -> None:
@@ -1137,9 +1112,6 @@ class BlemeesTuiApp(App):
         await self._send_user_message(sid, text)
 
     async def _dispatch_command(self, cmd) -> None:
-        sid = self.state.active_session_id
-        sess = self.state.sessions.get(sid) if sid else None
-
         if cmd.name == "new":
             self.action_new_session()
         elif cmd.name == "help":

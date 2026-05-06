@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import tempfile
 from pathlib import Path
@@ -57,6 +58,10 @@ async def fake_daemon(short_tmpdir):
                     await writer.drain()
         except asyncio.IncompleteReadError:
             pass
+        finally:
+            writer.close()
+            with contextlib.suppress(OSError, ConnectionError):
+                await writer.wait_closed()
 
     server = await asyncio.start_unix_server(handle, path=str(socket_path))
     yield socket_path, received, inbound_event
@@ -111,24 +116,42 @@ async def test_tracked_watch_is_restored_on_connect(short_tmpdir):
                 frame = json.loads(line.decode("utf-8"))
                 received.append(frame)
                 if frame.get("type") == "agent.hello":
-                    writer.write((json.dumps({
-                        "type": "agent.hello_ack",
-                        "daemon": "blemees-agentd/0.9.2",
-                        "protocol": "blemees-agent/1",
-                        "pid": 1,
-                        "backends": {"claude": "2.1"},
-                    }) + "\n").encode())
+                    writer.write(
+                        (
+                            json.dumps(
+                                {
+                                    "type": "agent.hello_ack",
+                                    "daemon": "blemees-agentd/0.9.2",
+                                    "protocol": "blemees-agent/1",
+                                    "pid": 1,
+                                    "backends": {"claude": "2.1"},
+                                }
+                            )
+                            + "\n"
+                        ).encode()
+                    )
                     await writer.drain()
                 elif frame.get("type") == "agent.watch":
-                    writer.write((json.dumps({
-                        "type": "agent.watching",
-                        "id": frame.get("id"),
-                        "session_id": frame["session_id"],
-                        "last_seq": 17,
-                    }) + "\n").encode())
+                    writer.write(
+                        (
+                            json.dumps(
+                                {
+                                    "type": "agent.watching",
+                                    "id": frame.get("id"),
+                                    "session_id": frame["session_id"],
+                                    "last_seq": 17,
+                                }
+                            )
+                            + "\n"
+                        ).encode()
+                    )
                     await writer.drain()
         except asyncio.IncompleteReadError:
             pass
+        finally:
+            writer.close()
+            with contextlib.suppress(OSError, ConnectionError):
+                await writer.wait_closed()
 
     server = await asyncio.start_unix_server(handle, path=str(socket_path))
     try:
@@ -167,25 +190,43 @@ async def test_session_unknown_on_restore_untracks_and_forwards(short_tmpdir):
                 line = await reader.readuntil(b"\n")
                 frame = json.loads(line.decode("utf-8"))
                 if frame.get("type") == "agent.hello":
-                    writer.write((json.dumps({
-                        "type": "agent.hello_ack",
-                        "daemon": "blemees-agentd/0.9.2",
-                        "protocol": "blemees-agent/1",
-                        "pid": 1,
-                        "backends": {"claude": "2.1"},
-                    }) + "\n").encode())
+                    writer.write(
+                        (
+                            json.dumps(
+                                {
+                                    "type": "agent.hello_ack",
+                                    "daemon": "blemees-agentd/0.9.2",
+                                    "protocol": "blemees-agent/1",
+                                    "pid": 1,
+                                    "backends": {"claude": "2.1"},
+                                }
+                            )
+                            + "\n"
+                        ).encode()
+                    )
                     await writer.drain()
                 elif frame.get("type") == "agent.watch":
-                    writer.write((json.dumps({
-                        "type": "agent.error",
-                        "id": frame.get("id"),
-                        "session_id": frame["session_id"],
-                        "code": "session_unknown",
-                        "message": "no such session",
-                    }) + "\n").encode())
+                    writer.write(
+                        (
+                            json.dumps(
+                                {
+                                    "type": "agent.error",
+                                    "id": frame.get("id"),
+                                    "session_id": frame["session_id"],
+                                    "code": "session_unknown",
+                                    "message": "no such session",
+                                }
+                            )
+                            + "\n"
+                        ).encode()
+                    )
                     await writer.drain()
         except asyncio.IncompleteReadError:
             pass
+        finally:
+            writer.close()
+            with contextlib.suppress(OSError, ConnectionError):
+                await writer.wait_closed()
 
     server = await asyncio.start_unix_server(handle, path=str(socket_path))
     try:
@@ -197,8 +238,7 @@ async def test_session_unknown_on_restore_untracks_and_forwards(short_tmpdir):
         await conn.start()
         for _ in range(100):
             if any(
-                f.get("type") == "agent.error"
-                and f.get("code") == "session_unknown"
+                f.get("type") == "agent.error" and f.get("code") == "session_unknown"
                 for f in forwarded
             ):
                 break
@@ -230,6 +270,10 @@ async def test_fatal_protocol_mismatch_stops_supervisor(short_tmpdir):
             await writer.drain()
         except asyncio.IncompleteReadError:
             pass
+        finally:
+            writer.close()
+            with contextlib.suppress(OSError, ConnectionError):
+                await writer.wait_closed()
 
     server = await asyncio.start_unix_server(handle, path=str(socket_path))
     try:

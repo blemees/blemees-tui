@@ -37,13 +37,24 @@ async def test_chat_pane_incremental_mounts_one_widget_per_turn():
         chat = app.query_one("#chat", ChatPaneWidget)
         sess = SessionState(session_id="s1")
         # First turn
-        apply(sess, {"type": "agent.user", "session_id": "s1", "seq": 1, "message": {"role": "user", "content": "hi"}})
+        apply(
+            sess,
+            {
+                "type": "agent.user",
+                "session_id": "s1",
+                "seq": 1,
+                "message": {"role": "user", "content": "hi"},
+            },
+        )
         chat.show_session(sess)
         await pilot.pause()
         first_blocks = list(chat.query(_TurnBlock))
         assert len(first_blocks) == 1
         # A streaming delta on the same turn should NOT add a widget.
-        apply(sess, {"type": "agent.delta", "session_id": "s1", "seq": 2, "kind": "text", "text": "hello"})
+        apply(
+            sess,
+            {"type": "agent.delta", "session_id": "s1", "seq": 2, "kind": "text", "text": "hello"},
+        )
         chat.show_session(sess)
         await pilot.pause()
         same_blocks = list(chat.query(_TurnBlock))
@@ -51,7 +62,15 @@ async def test_chat_pane_incremental_mounts_one_widget_per_turn():
         assert same_blocks[0] is first_blocks[0]
         # A second turn should add exactly one new widget.
         apply(sess, {"type": "agent.result", "session_id": "s1", "seq": 3, "subtype": "success"})
-        apply(sess, {"type": "agent.user", "session_id": "s1", "seq": 4, "message": {"role": "user", "content": "more"}})
+        apply(
+            sess,
+            {
+                "type": "agent.user",
+                "session_id": "s1",
+                "seq": 4,
+                "message": {"role": "user", "content": "more"},
+            },
+        )
         chat.show_session(sess)
         await pilot.pause()
         two_blocks = list(chat.query(_TurnBlock))
@@ -128,12 +147,15 @@ async def test_chat_pane_renders_pending_errors():
     async with app.run_test() as pilot:
         chat = app.query_one("#chat", ChatPaneWidget)
         sess = SessionState(session_id="s1")
-        apply(sess, {
-            "type": "agent.error",
-            "session_id": "s1",
-            "code": "auth_failed",
-            "message": "Claude session not authenticated",
-        })
+        apply(
+            sess,
+            {
+                "type": "agent.error",
+                "session_id": "s1",
+                "code": "auth_failed",
+                "message": "Claude session not authenticated",
+            },
+        )
         chat.show_session(sess)
         await pilot.pause()
         assert chat._errors_widget is not None

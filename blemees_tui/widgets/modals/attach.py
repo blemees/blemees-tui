@@ -55,7 +55,9 @@ class AttachModal(ModalScreen):
         with Vertical(id="attach-box"):
             yield Label("[b]Attach to live session[/b]")
             table = DataTable(id="live-sessions", zebra_stripes=True, cursor_type="row")
-            table.add_columns("session", "backend", "cwd", "title", "owner pid", "started", "last active")
+            table.add_columns(
+                "session", "backend", "cwd", "title", "owner pid", "started", "last active"
+            )
             yield table
             yield Label("[dim]Or paste a session id (UUID):[/]")
             yield Input(placeholder="00000000-0000-…", id="session-id")

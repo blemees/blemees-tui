@@ -292,7 +292,9 @@ class Connection:
     # Internal: request/response with id correlation
     # ------------------------------------------------------------------
 
-    async def _request(self, frame: dict[str, Any], *, ack_types: tuple[str, ...]) -> dict[str, Any]:
+    async def _request(
+        self, frame: dict[str, Any], *, ack_types: tuple[str, ...]
+    ) -> dict[str, Any]:
         self._next_req += 1
         req_id = f"req_{self._next_req}"
         frame = {**frame, "id": req_id}

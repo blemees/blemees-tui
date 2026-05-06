@@ -170,19 +170,11 @@ def _on_message(state: SessionState, frame: dict[str, Any]) -> None:
     # The most recent NOT-yet-finalised text/thinking blocks belong to
     # this message — the streaming buffer the deltas were filling in.
     open_text = next(
-        (
-            b
-            for b in reversed(turn.blocks)
-            if isinstance(b, TextBlock) and not b.finalized
-        ),
+        (b for b in reversed(turn.blocks) if isinstance(b, TextBlock) and not b.finalized),
         None,
     )
     open_thinking = next(
-        (
-            b
-            for b in reversed(turn.blocks)
-            if isinstance(b, ThinkingBlock) and not b.finalized
-        ),
+        (b for b in reversed(turn.blocks) if isinstance(b, ThinkingBlock) and not b.finalized),
         None,
     )
 
@@ -292,9 +284,7 @@ def _on_result(state: SessionState, frame: dict[str, Any]) -> None:
         turn_usage = Usage(
             input_tokens=int(usage_raw.get("input_tokens", 0) or 0),
             output_tokens=int(usage_raw.get("output_tokens", 0) or 0),
-            cache_creation_input_tokens=int(
-                usage_raw.get("cache_creation_input_tokens", 0) or 0
-            ),
+            cache_creation_input_tokens=int(usage_raw.get("cache_creation_input_tokens", 0) or 0),
             cache_read_input_tokens=int(usage_raw.get("cache_read_input_tokens", 0) or 0),
             reasoning_output_tokens=int(usage_raw.get("reasoning_output_tokens", 0) or 0),
         )

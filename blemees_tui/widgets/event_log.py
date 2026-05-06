@@ -74,7 +74,9 @@ class EventLogOverlay(ModalScreen):
                     yield btn
             yield VerticalScroll(id="log-rows")
             with Horizontal(id="filter-row"):
-                yield Input(placeholder="filter… (substring match on message + category)", id="filter-input")
+                yield Input(
+                    placeholder="filter… (substring match on message + category)", id="filter-input"
+                )
 
     async def on_mount(self) -> None:
         self._repaint()
@@ -152,6 +154,8 @@ def _chip_source(chip_id: str) -> EventLogSource | None:
 
 
 def _format_entry(entry: EventLogEntry) -> str:
-    ts = datetime.fromtimestamp(entry.ts_ms / 1000, tz=UTC).astimezone().strftime("%H:%M:%S.%f")[:-3]
+    ts = (
+        datetime.fromtimestamp(entry.ts_ms / 1000, tz=UTC).astimezone().strftime("%H:%M:%S.%f")[:-3]
+    )
     sid = entry.session_id[:8] if entry.session_id else "-"
     return f"{ts}  [{entry.source.value:>14}]  {sid}  {entry.category}  {entry.message}"

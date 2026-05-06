@@ -8,9 +8,28 @@ from blemees_tui.transcript import render
 
 
 def test_render_includes_user_assistant_tool_blocks_and_usage():
-    sess = SessionState(session_id="5a01abcd-1234-5678-9abc-def012345678", backend="claude", title="t")
-    apply(sess, {"type": "agent.user", "session_id": sess.session_id, "seq": 1, "message": {"role": "user", "content": "do it"}})
-    apply(sess, {"type": "agent.delta", "session_id": sess.session_id, "seq": 2, "kind": "text", "text": "ok"})
+    sess = SessionState(
+        session_id="5a01abcd-1234-5678-9abc-def012345678", backend="claude", title="t"
+    )
+    apply(
+        sess,
+        {
+            "type": "agent.user",
+            "session_id": sess.session_id,
+            "seq": 1,
+            "message": {"role": "user", "content": "do it"},
+        },
+    )
+    apply(
+        sess,
+        {
+            "type": "agent.delta",
+            "session_id": sess.session_id,
+            "seq": 2,
+            "kind": "text",
+            "text": "ok",
+        },
+    )
     apply(
         sess,
         {

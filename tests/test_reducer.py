@@ -23,7 +23,15 @@ def _new() -> SessionState:
 
 def test_user_then_text_delta_then_message_then_result():
     s = _new()
-    apply(s, {"type": "agent.user", "session_id": "s1", "seq": 1, "message": {"role": "user", "content": "hi"}})
+    apply(
+        s,
+        {
+            "type": "agent.user",
+            "session_id": "s1",
+            "seq": 1,
+            "message": {"role": "user", "content": "hi"},
+        },
+    )
     apply(s, {"type": "agent.delta", "session_id": "s1", "seq": 2, "kind": "text", "text": "hel"})
     apply(s, {"type": "agent.delta", "session_id": "s1", "seq": 3, "kind": "text", "text": "lo"})
     apply(
@@ -64,9 +72,22 @@ def test_user_then_text_delta_then_message_then_result():
 
 def test_thinking_delta_creates_separate_block():
     s = _new()
-    apply(s, {"type": "agent.user", "session_id": "s1", "seq": 1, "message": {"role": "user", "content": "?"}})
-    apply(s, {"type": "agent.delta", "session_id": "s1", "seq": 2, "kind": "thinking", "text": "ponder"})
-    apply(s, {"type": "agent.delta", "session_id": "s1", "seq": 3, "kind": "text", "text": "answer"})
+    apply(
+        s,
+        {
+            "type": "agent.user",
+            "session_id": "s1",
+            "seq": 1,
+            "message": {"role": "user", "content": "?"},
+        },
+    )
+    apply(
+        s,
+        {"type": "agent.delta", "session_id": "s1", "seq": 2, "kind": "thinking", "text": "ponder"},
+    )
+    apply(
+        s, {"type": "agent.delta", "session_id": "s1", "seq": 3, "kind": "text", "text": "answer"}
+    )
 
     blocks = s.turns[-1].blocks
     assert any(isinstance(b, ThinkingBlock) and b.text == "ponder" for b in blocks)
@@ -75,7 +96,15 @@ def test_thinking_delta_creates_separate_block():
 
 def test_tool_use_then_tool_result_pairing():
     s = _new()
-    apply(s, {"type": "agent.user", "session_id": "s1", "seq": 1, "message": {"role": "user", "content": "do"}})
+    apply(
+        s,
+        {
+            "type": "agent.user",
+            "session_id": "s1",
+            "seq": 1,
+            "message": {"role": "user", "content": "do"},
+        },
+    )
     apply(
         s,
         {
@@ -141,9 +170,19 @@ def test_streaming_text_after_tool_starts_new_block():
     interim message between tool calls.
     """
     s = _new()
-    apply(s, {"type": "agent.user", "session_id": "s1", "seq": 1, "message": {"role": "user", "content": "go"}})
+    apply(
+        s,
+        {
+            "type": "agent.user",
+            "session_id": "s1",
+            "seq": 1,
+            "message": {"role": "user", "content": "go"},
+        },
+    )
     # Pre-tool text streams in.
-    apply(s, {"type": "agent.delta", "session_id": "s1", "seq": 2, "kind": "text", "text": "Reading."})
+    apply(
+        s, {"type": "agent.delta", "session_id": "s1", "seq": 2, "kind": "text", "text": "Reading."}
+    )
     # Tool fires (stand-alone frame, as with --include-partial-messages).
     apply(
         s,
@@ -157,7 +196,16 @@ def test_streaming_text_after_tool_starts_new_block():
         },
     )
     # Post-tool text streams in — must land in a *new* text block.
-    apply(s, {"type": "agent.delta", "session_id": "s1", "seq": 4, "kind": "text", "text": "Now editing."})
+    apply(
+        s,
+        {
+            "type": "agent.delta",
+            "session_id": "s1",
+            "seq": 4,
+            "kind": "text",
+            "text": "Now editing.",
+        },
+    )
 
     blocks = s.turns[-1].blocks
     shapes = [type(b).__name__ for b in blocks]
@@ -175,7 +223,15 @@ def test_multi_message_turn_preserves_inline_text_tool_order():
     collapsed all text into block 0 and clustered tools at the bottom.
     """
     s = _new()
-    apply(s, {"type": "agent.user", "session_id": "s1", "seq": 1, "message": {"role": "user", "content": "do it"}})
+    apply(
+        s,
+        {
+            "type": "agent.user",
+            "session_id": "s1",
+            "seq": 1,
+            "message": {"role": "user", "content": "do it"},
+        },
+    )
 
     apply(
         s,
@@ -195,7 +251,16 @@ def test_multi_message_turn_preserves_inline_text_tool_order():
             ],
         },
     )
-    apply(s, {"type": "agent.tool_result", "session_id": "s1", "seq": 3, "tool_use_id": "tu_read", "output": "..."})
+    apply(
+        s,
+        {
+            "type": "agent.tool_result",
+            "session_id": "s1",
+            "seq": 3,
+            "tool_use_id": "tu_read",
+            "output": "...",
+        },
+    )
 
     apply(
         s,
@@ -215,7 +280,16 @@ def test_multi_message_turn_preserves_inline_text_tool_order():
             ],
         },
     )
-    apply(s, {"type": "agent.tool_result", "session_id": "s1", "seq": 5, "tool_use_id": "tu_edit", "output": "ok"})
+    apply(
+        s,
+        {
+            "type": "agent.tool_result",
+            "session_id": "s1",
+            "seq": 5,
+            "tool_use_id": "tu_edit",
+            "output": "ok",
+        },
+    )
 
     apply(
         s,
@@ -252,7 +326,15 @@ def test_tool_use_inside_agent_message_content_is_extracted():
     or tool calls never appear in the transcript.
     """
     s = _new()
-    apply(s, {"type": "agent.user", "session_id": "s1", "seq": 1, "message": {"role": "user", "content": "read it"}})
+    apply(
+        s,
+        {
+            "type": "agent.user",
+            "session_id": "s1",
+            "seq": 1,
+            "message": {"role": "user", "content": "read it"},
+        },
+    )
     apply(
         s,
         {
@@ -284,7 +366,15 @@ def test_tool_use_in_message_dedupes_against_standalone_frame():
     ``agent.message`` carries the full input. Dedupe by id and upgrade
     the input rather than creating a duplicate block."""
     s = _new()
-    apply(s, {"type": "agent.user", "session_id": "s1", "seq": 1, "message": {"role": "user", "content": "read it"}})
+    apply(
+        s,
+        {
+            "type": "agent.user",
+            "session_id": "s1",
+            "seq": 1,
+            "message": {"role": "user", "content": "read it"},
+        },
+    )
     apply(
         s,
         {
@@ -325,7 +415,15 @@ def test_tool_use_with_list_input_does_not_crash():
     layer swallowed the exception, so tool calls never appeared.
     """
     s = _new()
-    apply(s, {"type": "agent.user", "session_id": "s1", "seq": 1, "message": {"role": "user", "content": "ls"}})
+    apply(
+        s,
+        {
+            "type": "agent.user",
+            "session_id": "s1",
+            "seq": 1,
+            "message": {"role": "user", "content": "ls"},
+        },
+    )
     apply(
         s,
         {

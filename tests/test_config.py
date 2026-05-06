@@ -55,10 +55,13 @@ new_session = "ctrl+m"
 
 def test_env_overrides_layered_on_top(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     p = tmp_path / "config.toml"
-    p.write_text("""
+    p.write_text(
+        """
 [ui]
 theme = "dark"
-""", encoding="utf-8")
+""",
+        encoding="utf-8",
+    )
     monkeypatch.setenv("BLEMEES_TUI_THEME", "light")
     cfg = load_config(p)
     assert cfg.ui.theme == "light"

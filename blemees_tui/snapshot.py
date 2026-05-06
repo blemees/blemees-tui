@@ -19,7 +19,6 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import asdict
-from pathlib import Path
 from typing import Any
 
 from .persistence import (
@@ -149,12 +148,8 @@ def _turn_from_dict(d: dict[str, Any]) -> Turn:
         usage=Usage(
             input_tokens=int(usage_raw.get("input_tokens", 0) or 0),
             output_tokens=int(usage_raw.get("output_tokens", 0) or 0),
-            cache_creation_input_tokens=int(
-                usage_raw.get("cache_creation_input_tokens", 0) or 0
-            ),
-            cache_read_input_tokens=int(
-                usage_raw.get("cache_read_input_tokens", 0) or 0
-            ),
+            cache_creation_input_tokens=int(usage_raw.get("cache_creation_input_tokens", 0) or 0),
+            cache_read_input_tokens=int(usage_raw.get("cache_read_input_tokens", 0) or 0),
             reasoning_output_tokens=int(usage_raw.get("reasoning_output_tokens", 0) or 0),
         ),
         result_subtype=d.get("result_subtype"),
@@ -180,9 +175,7 @@ def session_from_dict(d: dict[str, Any]) -> SessionState | None:
         cumulative_usage=Usage(
             input_tokens=int(cu_raw.get("input_tokens", 0) or 0),
             output_tokens=int(cu_raw.get("output_tokens", 0) or 0),
-            cache_creation_input_tokens=int(
-                cu_raw.get("cache_creation_input_tokens", 0) or 0
-            ),
+            cache_creation_input_tokens=int(cu_raw.get("cache_creation_input_tokens", 0) or 0),
             cache_read_input_tokens=int(cu_raw.get("cache_read_input_tokens", 0) or 0),
             reasoning_output_tokens=int(cu_raw.get("reasoning_output_tokens", 0) or 0),
         ),

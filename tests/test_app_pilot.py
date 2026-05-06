@@ -51,8 +51,19 @@ async def test_scene_mid_stream_turn_renders(isolated_state_dir):
         sess = SessionState(session_id="s1", backend="claude")
         app.state.sessions["s1"] = sess
         app.state.active_session_id = "s1"
-        apply(sess, {"type": "agent.user", "session_id": "s1", "seq": 1, "message": {"role": "user", "content": "hi"}})
-        apply(sess, {"type": "agent.delta", "session_id": "s1", "seq": 2, "kind": "text", "text": "stream"})
+        apply(
+            sess,
+            {
+                "type": "agent.user",
+                "session_id": "s1",
+                "seq": 1,
+                "message": {"role": "user", "content": "hi"},
+            },
+        )
+        apply(
+            sess,
+            {"type": "agent.delta", "session_id": "s1", "seq": 2, "kind": "text", "text": "stream"},
+        )
         app._refresh_ui()
         await pilot.pause()
         chat = app.query_one("#chat", ChatPaneWidget)
@@ -98,7 +109,9 @@ async def test_scene_reconnecting_banner(isolated_state_dir):
         from blemees_tui.connection import ConnectionStatus
 
         app._on_connection_status(
-            ConnectionStatus(state="reconnecting", attempt=2, next_in_ms=3000, last_error="ECONNREFUSED")
+            ConnectionStatus(
+                state="reconnecting", attempt=2, next_in_ms=3000, last_error="ECONNREFUSED"
+            )
         )
         await pilot.pause()
         banner = app.query_one("#conn-banner", ConnectionBanner)

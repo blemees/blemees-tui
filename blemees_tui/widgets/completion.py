@@ -30,7 +30,10 @@ _MAX_ROWS = 8
 
 def _tui_suggestions() -> list[Suggestion]:
     return sorted(
-        [Suggestion(label=f"{TUI_PREFIX}{name}", description="", source="tui") for name in TUI_KNOWN],
+        [
+            Suggestion(label=f"{TUI_PREFIX}{name}", description="", source="tui")
+            for name in TUI_KNOWN
+        ],
         key=lambda s: s.label,
     )
 

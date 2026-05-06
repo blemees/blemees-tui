@@ -24,9 +24,9 @@ from pathlib import Path
 class Suggestion:
     """One row in the completion popup."""
 
-    label: str            # what gets inserted on accept (e.g. "/skill-name")
+    label: str  # what gets inserted on accept (e.g. "/skill-name")
     description: str = ""  # short blurb shown in the right column
-    source: str = ""      # "builtin" | "skill" | "tui" | "plugin:<name>"
+    source: str = ""  # "builtin" | "skill" | "tui" | "plugin:<name>"
 
 
 # ---------------------------------------------------------------------------

@@ -66,10 +66,10 @@ _UUID_RE = re.compile(
 
 @dataclass
 class Command:
-    name: str            # "new" | "close" | … (stripped of leading prefix)
-    arg: str = ""        # rest of the line (single argument)
+    name: str  # "new" | "close" | … (stripped of leading prefix)
+    arg: str = ""  # rest of the line (single argument)
     is_unknown: bool = False
-    raw: str = ""        # original input including the prefix
+    raw: str = ""  # original input including the prefix
 
 
 _KNOWN = {
@@ -93,7 +93,7 @@ def parse(text: str) -> Command | None:
     """Return a ``Command`` if ``text`` is a TUI command, else ``None``."""
     if not text or not text.startswith(PREFIX):
         return None
-    body = text[len(PREFIX):].strip()
+    body = text[len(PREFIX) :].strip()
     if not body:
         return None
     head, _, rest = body.partition(" ")
@@ -112,5 +112,5 @@ def completions(prefix: str) -> list[str]:
     """Tab-complete suggestions. ``:n`` → ``[:new]`` etc."""
     if not prefix.startswith(PREFIX):
         return []
-    head = prefix[len(PREFIX):].lower()
+    head = prefix[len(PREFIX) :].lower()
     return [f"{PREFIX}{name}" for name in sorted(_KNOWN) if name.startswith(head)]

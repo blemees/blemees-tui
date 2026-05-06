@@ -128,7 +128,15 @@ def test_tool_use_pairs_with_result_across_orderings():
     """Even when several tool_uses interleave, each tool_result lands on
     its matching block."""
     sess = SessionState(session_id="pair")
-    apply(sess, {"type": "agent.user", "session_id": "pair", "seq": 1, "message": {"role": "user", "content": "go"}})
+    apply(
+        sess,
+        {
+            "type": "agent.user",
+            "session_id": "pair",
+            "seq": 1,
+            "message": {"role": "user", "content": "go"},
+        },
+    )
     ids = ["a", "b", "c"]
     for i, tu in enumerate(ids, start=2):
         apply(

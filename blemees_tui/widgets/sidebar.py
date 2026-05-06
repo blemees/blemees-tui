@@ -59,9 +59,7 @@ class SidebarWidget(Widget):
         history = self.query_one("#sidebar-history", Vertical)
         history.remove_children()
         for entry in self._state.history[-50:][::-1]:
-            history.mount(
-                Static(f"⊘ {entry.title or entry.session_id[:8]}", classes="row")
-            )
+            history.mount(Static(f"⊘ {entry.title or entry.session_id[:8]}", classes="row"))
 
 
 def _mode_icon(mode: SessionMode) -> str:

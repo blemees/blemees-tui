@@ -70,7 +70,12 @@ def test_history_is_bounded(tmp_path: Path):
     p = tmp_path / "history.json"
     entries = [
         HistoryEntry(
-            session_id=f"s{i}", backend="claude", title=str(i), cwd="/", closed_at_ms=i, reason="user_closed"
+            session_id=f"s{i}",
+            backend="claude",
+            title=str(i),
+            cwd="/",
+            closed_at_ms=i,
+            reason="user_closed",
         )
         for i in range(HISTORY_MAX_ENTRIES + 50)
     ]

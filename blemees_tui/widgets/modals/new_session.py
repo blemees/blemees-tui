@@ -63,9 +63,7 @@ class NewSessionModal(ModalScreen):
         self._available = set(available_backends)
         self._default_cwd = default_cwd
         # Default to first available; fall back to first supported if none.
-        first_available = next(
-            (b for b in self.SUPPORTED_BACKENDS if b in self._available), None
-        )
+        first_available = next((b for b in self.SUPPORTED_BACKENDS if b in self._available), None)
         self._default_backend = first_available or self.SUPPORTED_BACKENDS[0]
 
     def compose(self) -> ComposeResult:

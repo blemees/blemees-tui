@@ -29,9 +29,16 @@ async def test_take_ownership_flips_mode_and_tracks(isolated_state_dir, monkeypa
 
     open_calls: list[dict] = []
 
-    async def fake_open(self, session_id, *, backend, options=None, resume=False, last_seen_seq=None):
+    async def fake_open(
+        self, session_id, *, backend, options=None, resume=False, last_seen_seq=None
+    ):
         open_calls.append(
-            {"session_id": session_id, "backend": backend, "resume": resume, "last_seen_seq": last_seen_seq}
+            {
+                "session_id": session_id,
+                "backend": backend,
+                "resume": resume,
+                "last_seen_seq": last_seen_seq,
+            }
         )
         return {"type": "agent.opened", "session_id": session_id, "last_seq": 0}
 
@@ -69,11 +76,13 @@ async def test_session_closed_frame_archives_to_history(isolated_state_dir, monk
         app.state.sessions["sid1"] = sess
         app.state.active_session_id = "sid1"
 
-        app._handle_frame({
-            "type": "agent.session_closed",
-            "session_id": "sid1",
-            "reason": "owner_closed",
-        })
+        app._handle_frame(
+            {
+                "type": "agent.session_closed",
+                "session_id": "sid1",
+                "reason": "owner_closed",
+            }
+        )
 
         assert "sid1" not in app.state.sessions
         assert app.state.active_session_id is None

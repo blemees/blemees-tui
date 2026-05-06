@@ -344,9 +344,7 @@ class ChatPaneWidget(Widget):
         scroll = self.query_one("#chat-scroll", VerticalScroll)
 
         # Switching sessions → reset bookkeeping and remount.
-        switched = (
-            force or session is None or session.session_id != self._session_id
-        )
+        switched = force or session is None or session.session_id != self._session_id
         if switched:
             scroll.remove_children()
             self._turn_widgets = []
@@ -508,13 +506,13 @@ class ChatPaneWidget(Widget):
         )
         if self._gap_widget is None:
             self._gap_widget = Static(text)
-            scroll.mount(self._gap_widget, before=self._turn_widgets[0] if self._turn_widgets else None)
+            scroll.mount(
+                self._gap_widget, before=self._turn_widgets[0] if self._turn_widgets else None
+            )
         else:
             self._gap_widget.update(text)
 
-    def _sync_replay_progress(
-        self, session: SessionState, scroll: VerticalScroll
-    ) -> None:
+    def _sync_replay_progress(self, session: SessionState, scroll: VerticalScroll) -> None:
         target = session.replay_target_seq
         if not target or session.last_seen_seq >= target:
             if self._replay_widget is not None:
@@ -526,10 +524,7 @@ class ChatPaneWidget(Widget):
         total = max(1, target - start)
         seen = max(0, session.last_seen_seq - start)
         pct = min(100, int(100 * seen / total))
-        text = (
-            f"[reverse cyan] ⟳ Loading transcript [/]  "
-            f"{seen:,} / {total:,} frames ({pct}%)"
-        )
+        text = f"[reverse cyan] ⟳ Loading transcript [/]  {seen:,} / {total:,} frames ({pct}%)"
         if self._replay_widget is None:
             self._replay_widget = Static(text)
             scroll.mount(
@@ -628,9 +623,7 @@ def _block_tag(block) -> str:
 def _format_thinking(block: ThinkingBlock, show_thinking: bool) -> str:
     if show_thinking:
         return f"[dim italic]🧠 {_escape(block.text)}[/]"
-    return (
-        f"[dim]🧠 reasoning · {len(block.text)} chars (press [b]t[/b] to expand)[/]"
-    )
+    return f"[dim]🧠 reasoning · {len(block.text)} chars (press [b]t[/b] to expand)[/]"
 
 
 def _format_tool(block: ToolUseBlock) -> RenderableType:
@@ -676,9 +669,7 @@ def _edit_path(value) -> str:
 _DIFF_TOOL_NAMES = frozenset({"Edit", "edit"})
 
 
-def _format_edit_diff(
-    name: str, value, block: ToolUseBlock
-) -> RenderableType | None:
+def _format_edit_diff(name: str, value, block: ToolUseBlock) -> RenderableType | None:
     """Render Claude's Edit-tool input as a syntax-highlighted unified diff
     via Pygments (same machinery as our Markdown code blocks). Returns None
     when this tool/shape doesn't have a diff to show, so the caller can
@@ -702,9 +693,7 @@ def _format_edit_diff(
         return None
     # Drop difflib's `--- ` / `+++ ` file headers — we render the path on
     # the head line so the lexer doesn't waste two rows on placeholders.
-    diff_text = "\n".join(
-        line for line in raw_diff if not line.startswith(("--- ", "+++ "))
-    )
+    diff_text = "\n".join(line for line in raw_diff if not line.startswith(("--- ", "+++ ")))
     head = Text(f"▸ {name}({_edit_path(value)})")
     syntax = Syntax(
         diff_text,
@@ -726,9 +715,7 @@ def _format_edit_diff(
 _WRITE_TOOL_NAMES = frozenset({"Write", "write"})
 
 
-def _format_write_content(
-    name: str, value, block: ToolUseBlock
-) -> RenderableType | None:
+def _format_write_content(name: str, value, block: ToolUseBlock) -> RenderableType | None:
     """Render Claude's Write-tool input as a syntax-highlighted code block.
     The lexer is guessed from the file extension so e.g. ``.py`` files use
     the Python lexer."""
