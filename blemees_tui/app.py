@@ -52,6 +52,8 @@ from .widgets import (
     EventLogOverlay,
     FooterStatusWidget,
     SidebarWidget,
+    TodoPanel,
+    TurnStatusBar,
 )
 from .widgets.modals import AttachModal, HelpModal, NewSessionModal
 
@@ -79,6 +81,8 @@ class BlemeesTuiApp(App):
     #main > #chat-column { width: 1fr; height: 100%; }
     #chat-column > #chat { width: 100%; height: 1fr; }
     #chat-column > #completion { width: 100%; height: auto; }
+    #chat-column > #todos { width: 100%; height: auto; }
+    #chat-column > #turn-status { width: 100%; height: 1; }
     #chat-column > #composer { width: 100%; height: auto; }
     """
 
@@ -167,6 +171,8 @@ class BlemeesTuiApp(App):
                 with Vertical(id="chat-column"):
                     yield ChatPaneWidget(id="chat")
                     yield CompletionPopup(id="completion")
+                    yield TodoPanel(self.state, id="todos")
+                    yield TurnStatusBar(self.state, id="turn-status")
                     yield ComposerWidget(id="composer")
         yield FooterStatusWidget(self.state, id="footer")
 
@@ -407,6 +413,8 @@ class BlemeesTuiApp(App):
     def _refresh_ui(self) -> None:
         self._refresh_footer()
         self._refresh_header()
+        self._refresh_turn_status()
+        self._refresh_todo_panel()
         active = (
             self.state.sessions.get(self.state.active_session_id)
             if self.state.active_session_id
@@ -441,6 +449,20 @@ class BlemeesTuiApp(App):
         try:
             footer = self.query_one("#footer", FooterStatusWidget)
             footer.update_status()
+        except Exception:
+            pass
+
+    def _refresh_turn_status(self) -> None:
+        try:
+            bar = self.query_one("#turn-status", TurnStatusBar)
+            bar.update_status()
+        except Exception:
+            pass
+
+    def _refresh_todo_panel(self) -> None:
+        try:
+            panel = self.query_one("#todos", TodoPanel)
+            panel.update_status()
         except Exception:
             pass
 
@@ -490,11 +512,8 @@ class BlemeesTuiApp(App):
             return
         title = active.title or active.session_id[:8]
         right_bits: list[str] = []
-        if active.backend:
-            backend = active.backend
-            if active.model:
-                backend += f"/{active.model}"
-            right_bits.append(backend)
+        if active.model:
+            right_bits.append(active.model)
         if active.cwd:
             right_bits.append(active.cwd)
         right = " · ".join(right_bits)

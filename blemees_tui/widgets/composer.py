@@ -138,7 +138,6 @@ class ComposerWidget(Widget):
     DEFAULT_CSS = """
     ComposerWidget {
         height: auto;
-        margin-top: 1;
     }
     ComposerWidget ComposerInput {
         /* Muted accent — same colour family as the focused state, faded

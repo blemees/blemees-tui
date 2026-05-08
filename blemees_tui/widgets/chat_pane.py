@@ -13,7 +13,6 @@ the app — chat_pane only needs to expose the banner + buttons.
 from __future__ import annotations
 
 import difflib
-import time
 from datetime import UTC, datetime
 
 from rich.console import Group, RenderableType
@@ -43,10 +42,9 @@ class _TurnBlock(Vertical):
     rather than remounting (which both flickers and starves Textual's
     Markdown widget of the chance to actually render).
 
-    While the turn is in flight the bottom row shows a live progress
-    indicator — wall-clock seconds + token count, ticking every 250ms —
-    so the user can see the agent is doing work even before the first
-    token streams in.
+    Live wall-clock seconds + token count for the in-flight turn live in
+    ``TurnStatusBar`` above the composer — keeps them visible regardless
+    of chat scroll position.
     """
 
     DEFAULT_CSS = """
@@ -64,7 +62,6 @@ class _TurnBlock(Vertical):
         margin-bottom: 1;
     }
     _TurnBlock Static.tool-block { margin-bottom: 1; }
-    _TurnBlock #progress { color: $warning; }
     _TurnBlock #divider { color: $text-muted; }
     """
 
@@ -75,10 +72,7 @@ class _TurnBlock(Vertical):
         # so we can swap if a tool_use slips in between deltas.
         self._block_widgets: list[Widget] = []
         self._block_tags: list[str] = []
-        self._progress: Static | None = None
         self._divider: Static | None = None
-        self._started_monotonic: float | None = None
-        self._tick_handle = None  # set_interval handle while turn is live
 
     # ------------------------------------------------------------------
     # Public render entry point
@@ -109,10 +103,7 @@ class _TurnBlock(Vertical):
                 self._block_widgets.append(self._mount_block(block, show_thinking))
                 self._block_tags.append(tag)
 
-        # 3. Progress row + ticker (only while in flight).
-        self._sync_progress(turn)
-
-        # 4. Result divider — appears once the turn locks.
+        # Result divider — appears once the turn locks.
         if turn.duration_ms is not None:
             u = turn.usage
             bits = [
@@ -136,12 +127,12 @@ class _TurnBlock(Vertical):
     # ------------------------------------------------------------------
 
     def _mount_block(self, block, show_thinking: bool) -> Widget:
-        # Anchor: keep the progress / result divider pinned to the bottom
-        # of the turn by mounting new content *before* whichever footer
-        # widget is currently present. Without this, streaming blocks slot
-        # in after the progress ticker and the timing/token row buries
-        # itself in the middle of the response.
-        before = self._progress or self._divider
+        # Anchor: keep the result divider pinned to the bottom of the
+        # turn by mounting new content *before* it. Without this, a late
+        # streaming block would slot in after the divider and the
+        # timing/token summary would bury itself in the middle of the
+        # response.
+        before = self._divider
         if isinstance(block, TextBlock):
             md = Markdown(block.text or " ")
             self.mount(md, before=before)
@@ -168,80 +159,12 @@ class _TurnBlock(Vertical):
         elif isinstance(block, ToolUseBlock) and isinstance(widget, Static):
             widget.update(_format_tool(block))
 
-    # ------------------------------------------------------------------
-    # Progress row + ticker
-    # ------------------------------------------------------------------
-
-    def _sync_progress(self, turn: Turn) -> None:
-        if turn.locked:
-            self._stop_tick()
-            if self._progress is not None:
-                self._progress.remove()
-                self._progress = None
-            return
-
-        if self._started_monotonic is None:
-            self._started_monotonic = _now()
-
-        if self._progress is None:
-            self._progress = Static(self._progress_text(turn), id="progress")
-            self.mount(self._progress)
-        else:
-            self._progress.update(self._progress_text(turn))
-
-        if self._tick_handle is None:
-            # 250ms — fast enough to feel live, slow enough to be cheap.
-            self._tick_handle = self.set_interval(0.25, lambda: self._on_tick(turn))
-
-    def _on_tick(self, turn: Turn) -> None:
-        if turn.locked or self._progress is None:
-            self._stop_tick()
-            return
-        self._progress.update(self._progress_text(turn))
-
-    def _stop_tick(self) -> None:
-        if self._tick_handle is not None:
-            try:
-                self._tick_handle.stop()
-            except Exception:
-                pass
-            self._tick_handle = None
-
-    def _progress_text(self, turn: Turn) -> str:
-        spinner = _SPINNER[int(_now() * 10) % len(_SPINNER)]
-        elapsed = 0.0
-        if self._started_monotonic is not None:
-            elapsed = max(0.0, _now() - self._started_monotonic)
-        # Token estimate: sum lengths of streamed text + tool inputs + tool
-        # outputs, divided by 4 (rough chars-per-token ratio). Tool blocks
-        # are counted because Claude Code suppresses text deltas by default
-        # — without including them, the live count sits at 0 for most of
-        # the turn even though plenty of work is happening. Once
-        # ``agent.result`` arrives we swap to the canonical usage on the
-        # divider.
-        chars = 0
-        for b in turn.blocks:
-            if isinstance(b, TextBlock):
-                chars += len(b.text)
-            elif isinstance(b, ThinkingBlock):
-                chars += len(b.text)
-            elif isinstance(b, ToolUseBlock):
-                if b.input is not None:
-                    chars += len(repr(b.input))
-                if b.result_text:
-                    chars += len(b.result_text)
-        approx_tokens = chars // 4
-        return f"{spinner} {elapsed:.1f}s · ~{approx_tokens} tok"
-
     # Reset internal state when the widget is re-attached to a new turn —
     # not currently used (one block per turn) but keeps things tidy if the
     # caller ever resets.
     def reset(self) -> None:
-        self._stop_tick()
-        self._started_monotonic = None
         self._block_widgets = []
         self._block_tags = []
-        self._progress = None
         self._divider = None
 
 
@@ -603,13 +526,6 @@ class ChatPaneWidget(Widget):
 # ---------------------------------------------------------------------------
 
 
-_SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
-
-
-def _now() -> float:
-    return time.monotonic()
-
-
 def _block_tag(block) -> str:
     if isinstance(block, TextBlock):
         return "text"
@@ -634,6 +550,9 @@ def _format_tool(block: ToolUseBlock) -> RenderableType:
     write_renderable = _format_write_content(name, block.input, block)
     if write_renderable is not None:
         return write_renderable
+    todo_summary = _format_todowrite_summary(name, block.input)
+    if todo_summary is not None:
+        return todo_summary
 
     head = f"▸ {_escape(name)}({_escape(_format_tool_input(block.input))})"
     if block.is_error:
@@ -740,6 +659,29 @@ def _format_write_content(name: str, value, block: ToolUseBlock) -> RenderableTy
         style = "red" if block.is_error else "dim"
         parts.append(Text(f"  → {preview}", style=style))
     return Group(*parts)
+
+
+# Tools whose input is ``{todos: [{content, activeForm, status}, …]}``.
+# Claude Code's TodoWrite is the canonical case; the lowercase alias is
+# defensive in case other backends ever surface their own variant.
+_TODOWRITE_TOOL_NAMES = frozenset({"TodoWrite", "todo_write"})
+
+
+def _format_todowrite_summary(name: str, value) -> str | None:
+    """One-liner stand-in for the TodoWrite checklist.
+
+    The full checklist is rendered by ``TodoPanel`` above the composer so
+    it stays visible regardless of chat-pane scroll position; the chat
+    transcript only carries a brief marker so the timeline of tool calls
+    is preserved without duplicating the list.
+    """
+    if name not in _TODOWRITE_TOOL_NAMES or not isinstance(value, dict):
+        return None
+    todos = value.get("todos")
+    if not isinstance(todos, list):
+        return None
+    completed = sum(1 for t in todos if isinstance(t, dict) and t.get("status") == "completed")
+    return f"[dim]▸ {name} · {completed}/{len(todos)} done[/]"
 
 
 def _lexer_for_path(path: str) -> str | None:

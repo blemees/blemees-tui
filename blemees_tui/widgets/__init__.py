@@ -8,6 +8,8 @@ from .debug_pane import DebugPane
 from .event_log import EventLogOverlay
 from .footer import FooterStatusWidget
 from .sidebar import SidebarWidget
+from .todo_panel import TodoPanel
+from .turn_status import TurnStatusBar
 
 __all__ = [
     "ChatPaneWidget",
@@ -18,4 +20,6 @@ __all__ = [
     "EventLogOverlay",
     "FooterStatusWidget",
     "SidebarWidget",
+    "TodoPanel",
+    "TurnStatusBar",
 ]

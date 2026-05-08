@@ -140,10 +140,11 @@ async def test_scene_auth_failed_renders_inline_bubble(isolated_state_dir):
         chat = app.query_one("#chat", ChatPaneWidget)
         assert chat._errors_widget is not None
         assert "auth_failed" in str(chat._errors_widget.render())
-        # Footer error chip reflects it.
+        # Footer error chip reflects it (pinned to the right side).
         footer = app.query_one("#footer", FooterStatusWidget)
         footer.update_status()
-        assert "1 errors" in str(footer.render())
+        errors = str(footer.query_one("#footer-errors").render())
+        assert "1 errors" in errors
 
 
 @pytest.mark.asyncio
