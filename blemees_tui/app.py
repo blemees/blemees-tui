@@ -24,12 +24,9 @@ from .commands import is_uuid as is_command_uuid, parse as parse_command
 from .config import Config, apply_cli_overrides, load_config
 from .connection import Connection, ConnectionStatus
 from .persistence import (
-    HistoryEntry,
     StoredSession,
     configure_logger,
-    load_history,
     load_sessions,
-    save_history,
     save_sessions,
 )
 from .reducer import apply as reduce_frame
@@ -38,7 +35,6 @@ from .state import (
     AppState,
     DaemonInfo,
     EventLogSource,
-    HistoryRecord,
     RateLimitsNotice,
     SessionMode,
     SessionState,
@@ -177,19 +173,6 @@ class BlemeesTuiApp(App):
         yield FooterStatusWidget(self.state, id="footer")
 
     async def on_mount(self) -> None:
-        # Restore history (read-only on mount; mutated by close/delete).
-        for entry in load_history():
-            self.state.history.append(
-                HistoryRecord(
-                    session_id=entry.session_id,
-                    backend=entry.backend,
-                    title=entry.title,
-                    cwd=entry.cwd,
-                    closed_at_ms=entry.closed_at_ms,
-                    reason=entry.reason,
-                )
-            )
-
         # Restore each known session from disk. Prefer the full snapshot
         # (turn list, blocks, usage, …) so the chat pane can paint
         # immediately on activation; fall back to the metadata-only row
@@ -310,7 +293,6 @@ class BlemeesTuiApp(App):
                         # Flush any locally-queued user messages.
                         asyncio.create_task(self._flush_pending_sends(sid))
                 if ftype == "agent.session_closed":
-                    self._archive_to_history(sess, reason=str(frame.get("reason", "owner_closed")))
                     self._connection and self._connection.untrack(sid)
                     self.state.sessions.pop(sid, None)
                     delete_snapshot(sid)
@@ -318,7 +300,6 @@ class BlemeesTuiApp(App):
                         self._set_active_session(None)
                     self._persist_sessions()
                 if ftype == "agent.error" and frame.get("code") == "session_unknown":
-                    self._archive_to_history(sess, reason="session_unknown")
                     self._connection and self._connection.untrack(sid)
                     self.state.sessions.pop(sid, None)
                     delete_snapshot(sid)
@@ -511,15 +492,11 @@ class BlemeesTuiApp(App):
             header.update("[dim]No session[/]")
             return
         title = active.title or active.session_id[:8]
-        right_bits: list[str] = []
-        if active.model:
-            right_bits.append(active.model)
-        if active.cwd:
-            right_bits.append(active.cwd)
-        right = " · ".join(right_bits)
+        # Model moved to TurnStatusBar (bottom-right, beside the turn
+        # count); chat-header keeps just the session title + cwd.
         text = f"[b]{_escape_markup(title)}[/]"
-        if right:
-            text += f"  · {_escape_markup(right)}"
+        if active.cwd:
+            text += f"  · {_escape_markup(active.cwd)}"
         header.update(text)
 
     # ------------------------------------------------------------------
@@ -746,13 +723,10 @@ class BlemeesTuiApp(App):
         ``:delete`` commands."""
         if self._connection is None:
             return
-        sess = self.state.sessions.get(sid)
         try:
             await self._connection.close_session(sid, delete=delete)
         finally:
             self._connection.untrack(sid)
-            if sess is not None:
-                self._archive_to_history(sess, reason="deleted" if delete else "user_closed")
             self.state.sessions.pop(sid, None)
             delete_snapshot(sid)
             if self.state.active_session_id == sid:
@@ -836,38 +810,6 @@ class BlemeesTuiApp(App):
         for err in errors:
             self.state.event_log.append(EventLogSource.TUI_INTERNAL, "command", err)
 
-    def _archive_to_history(self, sess: SessionState, *, reason: str) -> None:
-        record = HistoryRecord(
-            session_id=sess.session_id,
-            backend=sess.backend,
-            title=sess.title or sess.session_id[:8],
-            cwd=sess.cwd,
-            closed_at_ms=int(time.time() * 1000),
-            reason=reason,
-        )
-        self.state.history.append(record)
-        self._persist_history()
-
-    def _persist_history(self) -> None:
-        try:
-            save_history(
-                [
-                    HistoryEntry(
-                        session_id=r.session_id,
-                        backend=r.backend,
-                        title=r.title,
-                        cwd=r.cwd,
-                        closed_at_ms=r.closed_at_ms,
-                        reason=r.reason,
-                    )
-                    for r in self.state.history
-                ]
-            )
-        except OSError:
-            self.state.event_log.append(
-                EventLogSource.TUI_INTERNAL, "persistence", "save_history failed"
-            )
-
     # ------------------------------------------------------------------
     # Modal results
     # ------------------------------------------------------------------
@@ -895,7 +837,12 @@ class BlemeesTuiApp(App):
         self._set_active_session(sid)
         self._connection.track_owned(sid, backend=backend, options=options)
         try:
-            await self._connection.open_session(sid, backend=backend, options=options)
+            await self._connection.open_session(
+                sid,
+                backend=backend,
+                options=options,
+                alias=msg.title or None,
+            )
         except Exception as exc:
             self.state.event_log.append(
                 EventLogSource.DAEMON_ERROR, "open_failed", str(exc), session_id=sid
@@ -906,6 +853,13 @@ class BlemeesTuiApp(App):
             self._persist_sessions()
             self._refresh_ui()
             return
+        if msg.peer_mcp_attached:
+            interval = (msg.peer_poll_interval or "15m").strip() or "15m"
+            bootstrap = f"/loop {interval} check your peer inbox"
+            if sess.turn_active:
+                sess.pending_sends.append(bootstrap)
+            else:
+                await self._send_user_message(sid, bootstrap)
         self._persist_sessions()
         self._refresh_ui()
 
@@ -927,30 +881,12 @@ class BlemeesTuiApp(App):
             await self._connection.unwatch(sid)
         finally:
             self._connection.untrack(sid)
-            sess = self.state.sessions.pop(sid, None)
+            self.state.sessions.pop(sid, None)
             delete_snapshot(sid)
-            if sess and self.config_obj.ui.history_on_unwatch:
-                self._archive_to_history(sess, reason="user_closed")
             if self.state.active_session_id == sid:
                 self._set_active_session(None)
             self._persist_sessions()
             self._refresh_ui()
-
-    def on_chat_pane_widget_move_to_history(self, msg: ChatPaneWidget.MoveToHistory) -> None:
-        sid = msg.session_id
-        sess = self.state.sessions.pop(sid, None)
-        delete_snapshot(sid)
-        if sess is not None:
-            reason = sess.closed_reason or (
-                "session_taken" if sess.mode == SessionMode.DETACHED else "user_closed"
-            )
-            self._archive_to_history(sess, reason=reason)
-        if self._connection is not None:
-            self._connection.untrack(sid)
-        if self.state.active_session_id == sid:
-            self._set_active_session(None)
-        self._persist_sessions()
-        self._refresh_ui()
 
     async def _take_ownership(self, sid: str) -> None:
         if self._connection is None:

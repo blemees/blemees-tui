@@ -1,15 +1,13 @@
 """Turn status bar — pinned above the composer.
 
-Surfaces two read-only counters that used to live elsewhere: the live
-elapsed-time + token estimate that streamed inside ``_TurnBlock`` while a
-turn was in flight (left), and the total turn count that lived in the
-footer chip (right). Pinning both above the composer keeps them visible
-regardless of chat-pane scroll position.
+Left side shows the active session's model name when idle, swapped for a
+live spinner + elapsed-time + token estimate while a turn is in flight.
+Right side carries the turn count and context-window meter. Pinning both
+above the composer keeps them visible regardless of chat-pane scroll
+position.
 
-Once the turn locks (``agent.result`` lands), the running spinner is
-swapped for the same wall-clock + ``↑in / ↓out`` token summary that
-appears in the chat pane's per-turn divider — the user keeps seeing the
-final stats for the most recent turn until a new one kicks off.
+The post-turn summary that used to occupy the left side is intentionally
+gone — the chat pane's own per-turn divider already plays that role.
 """
 
 from __future__ import annotations
@@ -30,20 +28,13 @@ def _now() -> float:
     return time.monotonic()
 
 
-def _format_locked_turn(turn: Turn) -> str:
-    """Same shape as the chat-pane result divider: duration, ↑input,
-    ↓output, optional 🧠 reasoning, optional non-success subtype."""
-    u = turn.usage
-    bits = [
-        f"{(turn.duration_ms or 0) / 1000:.1f}s",
-        f"↑{u.input_tokens}",
-        f"↓{u.output_tokens}",
-    ]
-    if u.reasoning_output_tokens:
-        bits.append(f"🧠 {u.reasoning_output_tokens}")
-    if turn.result_subtype and turn.result_subtype != "success":
-        bits.append(f"[red]{turn.result_subtype}[/]")
-    return " · ".join(bits)
+def _format_tokens(n: int) -> str:
+    """Compact human form for token counts: 1234 → ``1.2k``, 1_234_567 → ``1.2M``."""
+    if n >= 1_000_000:
+        return f"{n / 1_000_000:.1f}M tok"
+    if n >= 1_000:
+        return f"{n // 1_000}k tok"
+    return f"{n} tok"
 
 
 class TurnStatusBar(Widget):
@@ -58,7 +49,7 @@ class TurnStatusBar(Widget):
     TurnStatusBar #turn-status-left {
         width: 1fr;
         content-align: left middle;
-        color: $warning;
+        color: $text-muted;
     }
     TurnStatusBar #turn-status-right {
         width: auto;
@@ -91,9 +82,22 @@ class TurnStatusBar(Widget):
     def update_status(self) -> None:
         s = self._state
         active = s.sessions.get(s.active_session_id) if s.active_session_id else None
-        right = f"{len(active.turns)} turns" if active else "0 turns"
+        turn_count = f"{len(active.turns)} turns" if active else "0 turns"
+        right_bits: list[str] = [turn_count]
+        if active is not None and active.context_window:
+            pct = round(active.context_tokens / active.context_window * 100)
+            if pct > 100:
+                # The agent's window inference is wrong (e.g. a 1M-beta
+                # session whose model id lacks the ``[1m]`` marker, so the
+                # daemon defaulted to 200k). Showing "600%" misleads more
+                # than it informs — fall back to the absolute count and
+                # flag it so the user can spot the misconfiguration.
+                right_bits.append(f"[$error]ctx {_format_tokens(active.context_tokens)}[/]")
+            else:
+                colour = "$success" if pct < 50 else "$warning" if pct < 80 else "$error"
+                right_bits.append(f"[{colour}]ctx {pct}%[/]")
+        right = " · ".join(right_bits)
 
-        left = ""
         in_flight = self._in_flight_turn(active)
         if in_flight is not None and active is not None:
             tracking = (active.session_id, len(active.turns) - 1)
@@ -103,17 +107,13 @@ class TurnStatusBar(Widget):
             elapsed = max(0.0, _now() - (self._started_monotonic or _now()))
             spinner = _SPINNER[int(_now() * 10) % len(_SPINNER)]
             tokens = self._approx_tokens(in_flight)
-            left = f"{spinner} {elapsed:.1f}s · ~{tokens} tok"
+            # $warning hue marks the live state; the model-name idle state
+            # picks up the bar's default $text-muted colour.
+            left = f"[$warning]{spinner} {elapsed:.1f}s · ~{tokens} tok[/]"
         else:
             self._tracked = None
             self._started_monotonic = None
-            last = self._last_locked_turn(active)
-            if last is not None:
-                # Dimmed so the bar reads as "past" rather than "live" — the
-                # absent spinner already carries that signal, but the colour
-                # shift makes it unambiguous against the streaming state's
-                # $warning hue.
-                left = f"[$text-muted]{_format_locked_turn(last)}[/]"
+            left = active.model if (active is not None and active.model) else ""
 
         try:
             self.query_one("#turn-status-left", Static).update(left)
@@ -127,18 +127,6 @@ class TurnStatusBar(Widget):
             return None
         last = active.turns[-1]
         return last if not last.locked else None
-
-    @staticmethod
-    def _last_locked_turn(active) -> Turn | None:
-        """Most recent turn that has both ``locked`` and a known
-        ``duration_ms`` — i.e. a real ``agent.result`` landed for it.
-        Without a duration we have nothing to display, so skip."""
-        if active is None or not active.turns:
-            return None
-        for turn in reversed(active.turns):
-            if turn.locked and turn.duration_ms is not None:
-                return turn
-        return None
 
     @staticmethod
     def _approx_tokens(turn: Turn) -> int:

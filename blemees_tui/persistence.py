@@ -3,8 +3,6 @@
 Files kept under ``$XDG_STATE_HOME/blemees/tui/``:
 
 * ``sessions.json`` — live + watching sessions index, rewritten on every change.
-* ``history.json``  — bounded ring (200 entries) of closed-but-remembered
-                      sessions.
 * ``snapshots/``    — full per-session in-memory state cached to disk
                       (turn list, blocks, usage, drafts) so a TUI restart
                       skips the full daemon replay.
@@ -29,7 +27,6 @@ from typing import Any
 
 SESSIONS_SCHEMA_VERSION = 1
 SNAPSHOT_SCHEMA_VERSION = 1
-HISTORY_MAX_ENTRIES = 200
 
 
 # ---------------------------------------------------------------------------
@@ -45,10 +42,6 @@ def state_dir() -> Path:
 
 def sessions_path() -> Path:
     return state_dir() / "sessions.json"
-
-
-def history_path() -> Path:
-    return state_dir() / "history.json"
 
 
 def log_path() -> Path:
@@ -106,7 +99,7 @@ class StoredSession:
     options: dict[str, Any]
     last_seen_seq: int
     last_active_at_ms: int
-    mode: str  # "owned" | "watching" — closed sessions live in history.json
+    mode: str  # "owned" | "watching" — closed sessions are dropped on close
     marked: bool = False
 
     def to_dict(self) -> dict[str, Any]:
@@ -167,71 +160,6 @@ def save_sessions(sessions: list[StoredSession], path: Path | None = None) -> No
         "version": SESSIONS_SCHEMA_VERSION,
         "sessions": [s.to_dict() for s in sessions],
     }
-    atomic_write_json(p, payload)
-
-
-# ---------------------------------------------------------------------------
-# history.json
-# ---------------------------------------------------------------------------
-
-
-@dataclass
-class HistoryEntry:
-    session_id: str
-    backend: str
-    title: str
-    cwd: str
-    closed_at_ms: int
-    reason: str  # "user_closed" | "owner_closed" | "deleted" | "session_unknown"
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "session_id": self.session_id,
-            "backend": self.backend,
-            "title": self.title,
-            "cwd": self.cwd,
-            "closed_at_ms": self.closed_at_ms,
-            "reason": self.reason,
-        }
-
-    @classmethod
-    def from_dict(cls, raw: dict[str, Any]) -> HistoryEntry:
-        return cls(
-            session_id=str(raw["session_id"]),
-            backend=str(raw.get("backend", "")),
-            title=str(raw.get("title", "")),
-            cwd=str(raw.get("cwd", "")),
-            closed_at_ms=int(raw.get("closed_at_ms", 0)),
-            reason=str(raw.get("reason", "")),
-        )
-
-
-def load_history(path: Path | None = None) -> list[HistoryEntry]:
-    p = path or history_path()
-    if not p.exists():
-        return []
-    try:
-        with p.open("r", encoding="utf-8") as fh:
-            raw = json.load(fh)
-    except (OSError, json.JSONDecodeError):
-        return []
-    if not isinstance(raw, dict):
-        return []
-    rows = raw.get("history") or []
-    out: list[HistoryEntry] = []
-    for row in rows:
-        if isinstance(row, dict) and "session_id" in row:
-            try:
-                out.append(HistoryEntry.from_dict(row))
-            except (KeyError, ValueError, TypeError):
-                continue
-    return out
-
-
-def save_history(entries: list[HistoryEntry], path: Path | None = None) -> None:
-    p = path or history_path()
-    bounded = entries[-HISTORY_MAX_ENTRIES:]
-    payload = {"version": SESSIONS_SCHEMA_VERSION, "history": [e.to_dict() for e in bounded]}
     atomic_write_json(p, payload)
 
 

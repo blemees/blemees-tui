@@ -5,13 +5,9 @@ from __future__ import annotations
 from pathlib import Path
 
 from blemees_tui.persistence import (
-    HISTORY_MAX_ENTRIES,
-    HistoryEntry,
     StoredSession,
     atomic_write_json,
-    load_history,
     load_sessions,
-    save_history,
     save_sessions,
     slugify,
     transcript_filename,
@@ -64,26 +60,6 @@ def test_sessions_load_defaults_marked_to_false_for_old_files(tmp_path: Path):
     loaded = load_sessions(p)
     assert len(loaded) == 1
     assert loaded[0].marked is False
-
-
-def test_history_is_bounded(tmp_path: Path):
-    p = tmp_path / "history.json"
-    entries = [
-        HistoryEntry(
-            session_id=f"s{i}",
-            backend="claude",
-            title=str(i),
-            cwd="/",
-            closed_at_ms=i,
-            reason="user_closed",
-        )
-        for i in range(HISTORY_MAX_ENTRIES + 50)
-    ]
-    save_history(entries, p)
-    loaded = load_history(p)
-    assert len(loaded) == HISTORY_MAX_ENTRIES
-    # Bounded by trailing slice — newest entries kept.
-    assert loaded[-1].session_id == f"s{HISTORY_MAX_ENTRIES + 49}"
 
 
 def test_slugify():

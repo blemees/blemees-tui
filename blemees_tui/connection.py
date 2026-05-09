@@ -217,6 +217,7 @@ class Connection:
         options: dict[str, Any] | None = None,
         resume: bool = False,
         last_seen_seq: int | None = None,
+        alias: str | None = None,
     ) -> dict[str, Any]:
         frame: dict[str, Any] = {
             "type": "agent.open",
@@ -228,6 +229,8 @@ class Connection:
             frame["resume"] = True
         if last_seen_seq is not None:
             frame["last_seen_seq"] = int(last_seen_seq)
+        if alias:
+            frame["alias"] = alias
         return await self._request(frame, ack_types=("agent.opened",))
 
     async def watch_session(

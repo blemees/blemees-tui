@@ -1,4 +1,4 @@
-"""App-level history archival (M1.4)."""
+"""App-level session lifecycle: take-ownership and close-on-frame paths."""
 
 from __future__ import annotations
 
@@ -64,9 +64,9 @@ async def test_take_ownership_flips_mode_and_tracks(isolated_state_dir, monkeypa
 
 
 @pytest.mark.asyncio
-async def test_session_closed_frame_archives_to_history(isolated_state_dir, monkeypatch):
+async def test_session_closed_frame_drops_session(isolated_state_dir, monkeypatch):
     """A ``agent.session_closed`` from the daemon (watcher-side, §16.2)
-    should move the session into history and persist."""
+    should drop the session from state and clear the active selection."""
     await _start_app_no_socket(monkeypatch)
 
     app = BlemeesTuiApp()
@@ -86,4 +86,3 @@ async def test_session_closed_frame_archives_to_history(isolated_state_dir, monk
 
         assert "sid1" not in app.state.sessions
         assert app.state.active_session_id is None
-        assert any(h.session_id == "sid1" and h.reason == "owner_closed" for h in app.state.history)

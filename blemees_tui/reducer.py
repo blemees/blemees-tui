@@ -321,10 +321,30 @@ def _on_error(state: SessionState, frame: dict[str, Any]) -> None:
     state.pending_errors.append(dict(frame))
 
 
+_KNOWN_WINDOW_TIERS = (200_000, 1_000_000, 2_000_000)
+
+
+def _round_up_window(tokens: int) -> int:
+    """Smallest known context-window tier that fits ``tokens``.
+
+    The daemon infers a session's window from the model id (200k by
+    default, 1M if the id carries an explicit ``-1m`` / ``[1m]`` marker).
+    That heuristic misses 1M-beta sessions whose id lacks the marker, so
+    when the TUI observes a turn that exceeded the inferred window we
+    upgrade to the next plausible tier ourselves.
+    """
+    for tier in _KNOWN_WINDOW_TIERS:
+        if tokens <= tier:
+            return tier
+    return tokens  # exceeded the largest known tier — accept the observation
+
+
 def _on_session_info_reply(state: SessionState, frame: dict[str, Any]) -> None:
     ctx = frame.get("context_tokens")
     if isinstance(ctx, int) and ctx >= 0:
         state.context_tokens = ctx
+        if state.context_window and ctx > state.context_window:
+            state.context_window = _round_up_window(ctx)
     if frame.get("model"):
         state.model = str(frame["model"])
     if frame.get("cwd"):

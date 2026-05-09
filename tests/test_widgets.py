@@ -148,9 +148,9 @@ class _TurnStatusOnlyApp(App):
 
 
 @pytest.mark.asyncio
-async def test_turn_status_shows_total_turns_on_right():
+async def test_turn_status_shows_model_on_left_and_turns_on_right():
     state = AppState()
-    sess = SessionState(session_id="s")
+    sess = SessionState(session_id="s", model="claude-sonnet-4-5")
     # Two completed turns — the bar reports the count regardless of
     # whether a turn is currently in flight.
     apply(
@@ -180,60 +180,37 @@ async def test_turn_status_shows_total_turns_on_right():
         bar = app.query_one("#turn-status", TurnStatusBar)
         bar.update_status()
         await pilot.pause()
+        # Model name occupies the left when idle (no in-flight turn).
+        left = str(bar.query_one("#turn-status-left").render())
+        assert "claude-sonnet-4-5" in left
+        assert "tok" not in left  # no live timer
+        # Turn count lives on the right; model is not duplicated there.
         right = str(bar.query_one("#turn-status-right").render())
         assert "2 turns" in right
-        # No turn in flight — left side stays empty.
-        left = str(bar.query_one("#turn-status-left").render())
-        assert "tok" not in left
+        assert "claude-sonnet-4-5" not in right
 
 
 @pytest.mark.asyncio
-async def test_turn_status_shows_locked_turn_summary_after_result():
-    """Once ``agent.result`` lands with a duration + usage, the live
-    spinner is replaced by the same ``Xs · ↑in · ↓out`` summary the
-    chat-pane divider shows."""
+async def test_turn_status_left_is_empty_when_session_has_no_model():
     state = AppState()
-    sess = SessionState(session_id="s")
-    apply(
-        sess,
-        {
-            "type": "agent.user",
-            "session_id": "s",
-            "seq": 1,
-            "message": {"role": "user", "content": "go"},
-        },
-    )
-    apply(
-        sess,
-        {
-            "type": "agent.result",
-            "session_id": "s",
-            "seq": 2,
-            "subtype": "success",
-            "duration_ms": 1500,
-            "usage": {"input_tokens": 1234, "output_tokens": 567},
-        },
-    )
+    sess = SessionState(session_id="s")  # no model set
     state.sessions["s"] = sess
     state.active_session_id = "s"
-    assert not sess.turn_active
     app = _TurnStatusOnlyApp(state)
     async with app.run_test() as pilot:
         bar = app.query_one("#turn-status", TurnStatusBar)
         bar.update_status()
         await pilot.pause()
         left = str(bar.query_one("#turn-status-left").render())
-        assert "1.5s" in left
-        assert "↑1234" in left
-        assert "↓567" in left
-        # No spinner / live token estimate after the turn locks.
-        assert "tok" not in left
+        assert left.strip() == ""
+        right = str(bar.query_one("#turn-status-right").render())
+        assert "0 turns" in right
 
 
 @pytest.mark.asyncio
-async def test_turn_status_shows_live_seconds_and_tokens_during_turn():
+async def test_turn_status_live_timer_replaces_model_on_left_during_turn():
     state = AppState()
-    sess = SessionState(session_id="s")
+    sess = SessionState(session_id="s", model="claude-sonnet-4-5")
     apply(
         sess,
         {
@@ -266,6 +243,9 @@ async def test_turn_status_shows_live_seconds_and_tokens_during_turn():
         left = str(bar.query_one("#turn-status-left").render())
         assert "tok" in left
         assert "s" in left  # elapsed seconds
+        # The live timer takes over the slot — model name is hidden while
+        # the turn is in flight.
+        assert "claude-sonnet-4-5" not in left
 
 
 def _render_to_text(renderable) -> str:

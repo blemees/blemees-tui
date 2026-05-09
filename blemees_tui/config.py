@@ -39,7 +39,6 @@ class UiConfig:
     theme: str = "dark"  # dark | light
     sidebar_width: int = 28
     show_thinking: bool = False
-    history_on_unwatch: bool = False
     markdown_code_theme: str = "monokai"
 
 

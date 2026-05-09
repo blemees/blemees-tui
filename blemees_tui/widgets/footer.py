@@ -6,9 +6,10 @@ each piece sits under the column it describes:
 * **Left** — sidebar-aligned: the connection state chip (``● connected``
   / ``● reconnecting`` / …). Sits in the same column as the sidebar.
 * **Middle** — text-area-aligned: ``blemees v…``, the active session's
-  agent version (``claude v…`` / ``codex v…``), context-window meter,
-  and any rate-limit notice. Starts at the column where the chat / text
-  input begins (sidebar + chat-pane padding).
+  agent version (``claude v…`` / ``codex v…``), and any rate-limit
+  notice. Starts at the column where the chat / text input begins
+  (sidebar + chat-pane padding). The context-window meter lives on the
+  ``TurnStatusBar`` (right of turns) — it isn't duplicated here.
 * **Right** — pinned: the ``! N errors`` chip. Clicking anywhere on the
   footer when errors are pending opens the event log.
 """
@@ -98,16 +99,11 @@ class FooterStatusWidget(Widget):
         else:
             backend_bits = [f"{k} v{v}" for k, v in backends.items()] if backends else []
             agent_label = " · ".join(backend_bits) if backend_bits else "no agent"
-        ctx = ""
-        if active and active.context_window:
-            ctx = f"ctx {active.context_tokens // 1000}k/{active.context_window // 1000}k"
         rate_chip = ""
         if s.rate_limits and s.rate_limits.text:
             colour = "yellow" if s.rate_limits.level == "warn" else "white"
             rate_chip = f"[{colour}]↺ {s.rate_limits.text}[/]"
         info_bits = [f"[dim]blemees v{__version__}[/]", f"[dim]{agent_label}[/]"]
-        if ctx:
-            info_bits.append(ctx)
         if rate_chip:
             info_bits.append(rate_chip)
         info_text = " · ".join(info_bits)

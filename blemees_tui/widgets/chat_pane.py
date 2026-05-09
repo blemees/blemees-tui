@@ -210,11 +210,6 @@ class ChatPaneWidget(Widget):
             super().__init__()
             self.session_id = session_id
 
-    class MoveToHistory(Message):
-        def __init__(self, session_id: str) -> None:
-            super().__init__()
-            self.session_id = session_id
-
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
         self._session_id: str | None = None
@@ -227,6 +222,7 @@ class ChatPaneWidget(Widget):
         self._errors_widget: Static | None = None
         self._gap_widget: Static | None = None
         self._replay_widget: Static | None = None
+        self._pending_widget: Static | None = None
         # Tailing state — when True (default), new turns auto-scroll into
         # view; when False the user has scrolled up and we leave the view
         # alone, surfacing a "paused" indicator at the bottom of the pane.
@@ -272,6 +268,7 @@ class ChatPaneWidget(Widget):
             scroll.remove_children()
             self._turn_widgets = []
             self._empty_state = None
+            self._pending_widget = None
             self._session_id = session.session_id if session is not None else None
             # New session always starts tailed.
             self._tailing = True
@@ -320,6 +317,10 @@ class ChatPaneWidget(Widget):
 
         # Inline error bubbles for session-scoped errors (§9.8).
         self._sync_errors(session, scroll)
+
+        # Locally-queued user messages that landed mid-turn — surface them
+        # below the in-flight turn so the user can see what's pending.
+        self._sync_pending_sends(session, scroll)
 
         # Auto-scroll the latest turn into view *only* when tailing.
         # Mounts are async — the widgets have height 0 until the next
@@ -472,6 +473,21 @@ class ChatPaneWidget(Widget):
         else:
             self._errors_widget.update(rendered)
 
+    def _sync_pending_sends(self, session: SessionState, scroll: VerticalScroll) -> None:
+        pending = session.pending_sends
+        if not pending:
+            if self._pending_widget is not None:
+                self._pending_widget.remove()
+                self._pending_widget = None
+            return
+        lines = [f"[$text-muted]⏳ queued · {_escape(text)}[/]" for text in pending]
+        rendered = "\n".join(lines)
+        if self._pending_widget is None:
+            self._pending_widget = Static(rendered)
+            scroll.mount(self._pending_widget)
+        else:
+            self._pending_widget.update(rendered)
+
     # ------------------------------------------------------------------
     # Watch / detached / closed banner
     # ------------------------------------------------------------------
@@ -517,8 +533,6 @@ class ChatPaneWidget(Widget):
             self.post_message(self.StopWatching(sid))
         elif bid == "btn-reclaim":
             self.post_message(self.Reclaim(sid))
-        elif bid == "btn-history":
-            self.post_message(self.MoveToHistory(sid))
 
 
 # ---------------------------------------------------------------------------
@@ -758,12 +772,7 @@ def _banner_buttons(mode: str) -> list[Button]:
             Button("Stop watching", id="btn-stop-watching"),
         ]
     if mode == "detached":
-        return [
-            Button("Reclaim", id="btn-reclaim", variant="primary"),
-            Button("Move to history", id="btn-history"),
-        ]
-    if mode == "closed":
-        return [Button("Move to history", id="btn-history")]
+        return [Button("Reclaim", id="btn-reclaim", variant="primary")]
     return []
 
 

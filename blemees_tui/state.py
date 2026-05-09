@@ -227,22 +227,9 @@ class RateLimitsNotice:
 
 
 @dataclass
-class HistoryRecord:
-    """In-memory history entry — mirror of persistence.HistoryEntry (§7.4)."""
-
-    session_id: str
-    backend: str
-    title: str
-    cwd: str
-    closed_at_ms: int
-    reason: str  # "user_closed" | "deleted" | "owner_closed" | "session_unknown"
-
-
-@dataclass
 class AppState:
     daemon: DaemonInfo = field(default_factory=DaemonInfo)
     sessions: dict[str, SessionState] = field(default_factory=dict)
-    history: list[HistoryRecord] = field(default_factory=list)
     active_session_id: str | None = None
     event_log: EventLog = field(default_factory=EventLog)
     connection_status: str = "disconnected"  # connected | reconnecting | disconnected

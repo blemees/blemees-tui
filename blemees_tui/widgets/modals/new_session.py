@@ -12,13 +12,16 @@ sent to the daemon — the backend keeps its default.
 from __future__ import annotations
 
 import json
+import os
+import shutil
+from pathlib import Path
 from typing import Any
 
 from textual.app import ComposeResult
 from textual.containers import Vertical
 from textual.message import Message
 from textual.screen import ModalScreen
-from textual.widgets import Button, Collapsible, Input, Label, RadioButton, RadioSet
+from textual.widgets import Button, Checkbox, Collapsible, Input, Label, RadioButton, RadioSet
 
 
 class NewSessionModal(ModalScreen):
@@ -44,6 +47,8 @@ class NewSessionModal(ModalScreen):
             cwd: str,
             title: str,
             options: dict[str, Any],
+            peer_mcp_attached: bool = False,
+            peer_poll_interval: str = "15m",
         ) -> None:
             super().__init__()
             self.backend = backend
@@ -51,6 +56,8 @@ class NewSessionModal(ModalScreen):
             self.cwd = cwd
             self.title = title
             self.options = options
+            self.peer_mcp_attached = peer_mcp_attached
+            self.peer_poll_interval = peer_poll_interval
 
     # Every backend the TUI knows how to drive. The radio always lists both;
     # rows for backends the daemon didn't advertise are disabled so the user
@@ -91,8 +98,16 @@ class NewSessionModal(ModalScreen):
             yield Label("cwd:")
             yield Input(value=self._default_cwd, id="cwd")
 
-            yield Label("Title (optional):")
-            yield Input(id="title")
+            yield Label("Alias (optional · [a-z][a-z0-9_-], used for peer claims & sidebar):")
+            yield Input(placeholder="architect", id="title")
+
+            yield Checkbox(
+                "Attach blemees-peer MCP server (Claude only)",
+                value=False,
+                id="attach-peer-mcp",
+            )
+            yield Label("Peer inbox poll interval (e.g. 5m, 15m, 1h):")
+            yield Input(value="15m", placeholder="15m", id="peer-poll-interval")
 
             with Collapsible(title="Advanced — Claude", collapsed=True, id="adv-claude"):
                 yield Label("permission_mode (default · acceptEdits · bypassPermissions · plan):")
@@ -144,8 +159,22 @@ class NewSessionModal(ModalScreen):
         cwd = self.query_one("#cwd", Input).value
         title = self.query_one("#title", Input).value
         options = self._collect_options(backend, model, cwd)
+        # Mirror the gate in `_collect_options`: peer-mcp only attaches when
+        # backend is claude AND the checkbox is on.
+        peer_attached = backend == "claude" and self._is_peer_mcp_attached()
+        peer_interval = self._peer_poll_interval()
         self.app.pop_screen()
-        self.app.post_message(self.Submit(backend, model, cwd, title, options))
+        self.app.post_message(
+            self.Submit(
+                backend,
+                model,
+                cwd,
+                title,
+                options,
+                peer_mcp_attached=peer_attached,
+                peer_poll_interval=peer_interval,
+            )
+        )
 
     def _collect_options(self, backend: str, model: str, cwd: str) -> dict[str, Any]:
         opts: dict[str, Any] = {}
@@ -155,9 +184,24 @@ class NewSessionModal(ModalScreen):
             opts["cwd"] = cwd
         if backend == "claude":
             opts.update(self._claude_options())
+            if self._is_peer_mcp_attached():
+                _attach_peer_mcp(opts)
         elif backend == "codex":
             opts.update(self._codex_options())
         return opts
+
+    def _is_peer_mcp_attached(self) -> bool:
+        try:
+            return bool(self.query_one("#attach-peer-mcp", Checkbox).value)
+        except Exception:
+            return False
+
+    def _peer_poll_interval(self) -> str:
+        try:
+            raw = self.query_one("#peer-poll-interval", Input).value.strip()
+        except Exception:
+            return "15m"
+        return raw or "15m"
 
     def _claude_options(self) -> dict[str, Any]:
         # Note: only `tools` is documented as having empty-string semantics
@@ -212,6 +256,46 @@ class NewSessionModal(ModalScreen):
 
 
 _UNSET = object()
+
+
+def _peer_mcp_command() -> str:
+    # Resolve the launcher: PATH first, then the sibling peer venv that
+    # the dev workflow uses. Falls back to the bare name so the failure
+    # surfaces at Claude Code's MCP launch (with a clear error) rather
+    # than silently producing an empty config.
+    found = shutil.which("blemees-peer-mcp")
+    if found:
+        return found
+    here = Path(__file__).resolve()
+    sibling = here.parents[4] / "blemees-peer" / ".venv" / "bin" / "blemees-peer-mcp"
+    if sibling.exists():
+        return str(sibling)
+    return "blemees-peer-mcp"
+
+
+def _peer_mcp_config_path() -> Path:
+    base = os.environ.get("XDG_CACHE_HOME") or str(Path.home() / ".cache")
+    return Path(base) / "blemees-tui" / "peer-mcp.json"
+
+
+def _attach_peer_mcp(opts: dict[str, Any]) -> None:
+    """Write a Claude Code MCP config for the peer sidecar and append its
+    path to ``opts['mcp_config']``. Idempotent — safe to run every submit.
+    """
+    config = {
+        "mcpServers": {
+            "blemees-peer": {"command": _peer_mcp_command()},
+        }
+    }
+    path = _peer_mcp_config_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(config, indent=2))
+    existing = opts.get("mcp_config")
+    if isinstance(existing, list):
+        if str(path) not in existing:
+            existing.append(str(path))
+    else:
+        opts["mcp_config"] = [str(path)]
 
 
 def _coerce_input(raw: str, kind: str) -> Any:

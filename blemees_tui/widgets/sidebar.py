@@ -15,9 +15,9 @@ from ..state import AppState, SessionMode
 
 
 class SidebarWidget(Widget):
-    """Read-only sessions + history index. Switching sessions is keyboard-
-    driven (``1``–``9`` and ``Ctrl+Tab``), so the rows are plain Static
-    widgets — no ListView focus or selection noise.
+    """Read-only sessions index. Switching sessions is keyboard-driven
+    (``1``–``9`` and ``Ctrl+Tab``), so the rows are plain Static widgets —
+    no ListView focus or selection noise.
 
     Live sessions are grouped by ``cwd`` under a dim path header so it's
     obvious which sessions belong to which project. The numeric index next
@@ -45,8 +45,6 @@ class SidebarWidget(Widget):
             yield Label("[dim]Ctrl+T · attach[/]")
             yield Static("─ live ─", classes="section", id="sidebar-live-header")
             yield Vertical(id="sidebar-live")
-            yield Static("─ history ─", classes="section", id="sidebar-history-header")
-            yield Vertical(id="sidebar-history")
 
     def refresh_sessions(self, *, active_id: str | None = None) -> None:
         live = self.query_one("#sidebar-live", Vertical)
@@ -80,11 +78,6 @@ class SidebarWidget(Widget):
                     # in-flight color so the two read as the same state.
                     row = f"[$warning]{row}[/]"
                 live.mount(Static(row, classes="row"))
-
-        history = self.query_one("#sidebar-history", Vertical)
-        history.remove_children()
-        for entry in self._state.history[-50:][::-1]:
-            history.mount(Static(f"⊘ {entry.title or entry.session_id[:8]}", classes="row"))
 
 
 def _mode_icon(mode: SessionMode) -> str:
