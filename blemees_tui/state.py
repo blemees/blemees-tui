@@ -207,12 +207,14 @@ class EventLog:
 
 @dataclass
 class DaemonInfo:
-    """Mirror of ``agent.hello_ack`` — populated after handshake."""
+    """Mirror of ``hello_ack`` — populated after handshake (blemees/3)."""
 
-    daemon: str = ""  # e.g. "blemees-agentd/0.9.2"
+    daemon: str = ""  # e.g. "blemees-agentd/0.11.0"
     protocol: str = ""
     pid: int = 0
-    backends: dict[str, str] = field(default_factory=dict)
+    # Detected ACP agents (name → version-ish) and configured profile names.
+    agents: dict[str, str] = field(default_factory=dict)
+    profiles: list[str] = field(default_factory=list)
 
 
 @dataclass

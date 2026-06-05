@@ -29,7 +29,7 @@ from .persistence import (
     load_sessions,
     save_sessions,
 )
-from .reducer import apply as reduce_frame
+from .reducer import apply as reduce_frame, apply_user_prompt as record_user_prompt
 from .snapshot import delete_snapshot, load_snapshot, save_snapshot
 from .state import (
     AppState,
@@ -227,7 +227,7 @@ class BlemeesTuiApp(App):
             else:
                 self._connection.track_owned(
                     sess.session_id,
-                    backend=sess.backend,
+                    profile=sess.backend or None,
                     options=sess.options,
                     last_seen_seq=sess.last_seen_seq,
                 )
@@ -252,17 +252,18 @@ class BlemeesTuiApp(App):
     def _handle_frame(self, frame: dict[str, Any]) -> None:
         self._debug_frames.append(("in", frame))
         ftype = frame.get("type", "")
-        if ftype == "agent.hello_ack":
+        if ftype == "hello_ack":
             self.state.daemon = DaemonInfo(
                 daemon=str(frame.get("daemon", "")),
                 protocol=str(frame.get("protocol", "")),
                 pid=int(frame.get("pid", 0) or 0),
-                backends=dict(frame.get("backends") or {}),
+                agents=dict(frame.get("agents") or {}),
+                profiles=list(frame.get("profiles") or []),
             )
             self.state.event_log.append(
                 EventLogSource.CONNECTION, "hello", f"connected to {self.state.daemon.daemon}"
             )
-        elif ftype == "agent.error" and "session_id" not in frame:
+        elif ftype == "error" and "session_id" not in frame:
             # Connection-scope error — log; reducer doesn't see it.
             code = str(frame.get("code", ""))
             msg = str(frame.get("message", ""))
@@ -273,16 +274,13 @@ class BlemeesTuiApp(App):
         sid = frame.get("session_id")
         if isinstance(sid, str):
             sess = self.state.sessions.get(sid)
-            if sess is None and ftype.startswith(("agent.", "blemees-agentd.")):
-                # Unknown session — only register if it's a session-scoped frame
-                # we can reasonably attach (e.g. agent.system_init from a watch).
+            if sess is None and ftype.startswith("session."):
+                # Unknown session — register so a viewer/replayed stream attaches.
                 sess = SessionState(session_id=sid)
                 self.state.sessions[sid] = sess
             if sess is not None:
                 reduce_frame(sess, frame)
-                if ftype == "agent.notice":
-                    self._on_notice(sid, frame)
-                if ftype == "agent.result":
+                if ftype == "session.result":
                     # Refresh context_tokens / cumulative usage for the footer
                     # — fire-and-forget; reply handled via the reducer.
                     self._schedule_session_info(sid)
@@ -292,14 +290,14 @@ class BlemeesTuiApp(App):
                     if sess is not None and sess.pending_sends:
                         # Flush any locally-queued user messages.
                         asyncio.create_task(self._flush_pending_sends(sid))
-                if ftype == "agent.session_closed":
+                if ftype == "session.closed_notice":
                     self._connection and self._connection.untrack(sid)
                     self.state.sessions.pop(sid, None)
                     delete_snapshot(sid)
                     if self.state.active_session_id == sid:
                         self._set_active_session(None)
                     self._persist_sessions()
-                if ftype == "agent.error" and frame.get("code") == "session_unknown":
+                if ftype in ("error", "session.error") and frame.get("code") == "session_unknown":
                     self._connection and self._connection.untrack(sid)
                     self.state.sessions.pop(sid, None)
                     delete_snapshot(sid)
@@ -678,8 +676,8 @@ class BlemeesTuiApp(App):
         self.push_screen(DebugPane(self._debug_frames))
 
     def action_new_session(self) -> None:
-        backends = list(self.state.daemon.backends.keys()) or ["claude"]
-        self.push_screen(NewSessionModal(backends, default_cwd=os.getcwd()))
+        profiles = list(self.state.daemon.profiles) or ["default"]
+        self.push_screen(NewSessionModal(profiles, default_cwd=os.getcwd()))
 
     def action_attach(self) -> None:
         async def _fetch() -> list[dict[str, Any]]:
@@ -818,15 +816,15 @@ class BlemeesTuiApp(App):
         if self._connection is None:
             return
         sid = str(uuid.uuid4())
-        backend = msg.backend or "claude"
+        # blemees/3: the selected value is a profile; the agent's model is the
+        # profile's concern, so it isn't an open-time option (cwd still is).
+        profile = msg.backend or "default"
         options: dict[str, Any] = dict(msg.options or {})
-        if msg.model and "model" not in options:
-            options["model"] = msg.model
         if msg.cwd and "cwd" not in options:
             options["cwd"] = msg.cwd
         sess = SessionState(
             session_id=sid,
-            backend=backend,
+            backend=profile,
             model=msg.model,
             cwd=msg.cwd,
             title=msg.title,
@@ -835,11 +833,11 @@ class BlemeesTuiApp(App):
         )
         self.state.sessions[sid] = sess
         self._set_active_session(sid)
-        self._connection.track_owned(sid, backend=backend, options=options)
+        self._connection.track_owned(sid, profile=profile, options=options)
         try:
             await self._connection.open_session(
                 sid,
-                backend=backend,
+                profile=profile,
                 options=options,
                 alias=msg.title or None,
             )
@@ -878,7 +876,7 @@ class BlemeesTuiApp(App):
         if self._connection is None:
             return
         try:
-            await self._connection.unwatch(sid)
+            await self._connection.detach_session(sid)
         finally:
             self._connection.untrack(sid)
             self.state.sessions.pop(sid, None)
@@ -897,7 +895,7 @@ class BlemeesTuiApp(App):
         try:
             await self._connection.open_session(
                 sid,
-                backend=sess.backend or "claude",
+                profile=sess.backend or None,
                 options=sess.options,
                 resume=True,
                 last_seen_seq=sess.last_seen_seq,
@@ -911,7 +909,7 @@ class BlemeesTuiApp(App):
         sess.taken_by_pid = None
         self._connection.track_owned(
             sid,
-            backend=sess.backend or "claude",
+            profile=sess.backend or None,
             options=sess.options,
             last_seen_seq=sess.last_seen_seq,
         )
@@ -928,7 +926,7 @@ class BlemeesTuiApp(App):
         self._set_active_session(sid)
         self._connection.track_watch(sid)
         try:
-            await self._connection.watch_session(sid, last_seen_seq=0)
+            await self._connection.attach_session(sid, as_role="viewer", last_seen_seq=0)
         except Exception as exc:
             self.state.event_log.append(
                 EventLogSource.DAEMON_ERROR, "watch_failed", str(exc), session_id=sid
@@ -1050,11 +1048,10 @@ class BlemeesTuiApp(App):
         if self._connection is None:
             return
         await self._connection.send_user(sid, text)
-        # Local echo: the reducer will normally run on the daemon's
-        # agent.user_echo, but per spec we render locally regardless.
+        # blemees/3 agents don't echo the user turn back, so record it locally.
         sess = self.state.sessions.get(sid)
         if sess is not None:
-            reduce_frame(sess, {"type": "agent.user", "message": {"role": "user", "content": text}})
+            record_user_prompt(sess, text)
             self._refresh_ui()
 
     async def _flush_pending_sends(self, sid: str) -> None:
@@ -1172,7 +1169,7 @@ class BlemeesTuiApp(App):
                 self._set_active_session(target)
                 self._connection.track_watch(target)
                 try:
-                    await self._connection.watch_session(target, last_seen_seq=0)
+                    await self._connection.attach_session(target, as_role="viewer", last_seen_seq=0)
                 except Exception as exc:
                     self.state.event_log.append(
                         EventLogSource.DAEMON_ERROR, "watch_failed", str(exc), session_id=target

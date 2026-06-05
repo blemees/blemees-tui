@@ -92,13 +92,13 @@ class FooterStatusWidget(Widget):
             "fatal": "[$error bold]✗ fatal[/]",
         }.get(s.connection_status, "[dim]· …[/]")
         active = s.sessions.get(s.active_session_id) if s.active_session_id else None
-        backends = s.daemon.backends or {}
+        agents = s.daemon.agents or {}
         if active is not None and active.backend:
-            version = backends.get(active.backend, "")
-            agent_label = f"{active.backend} v{version}" if version else active.backend
+            # blemees/3: a session's `backend` field carries its profile name.
+            agent_label = active.backend
         else:
-            backend_bits = [f"{k} v{v}" for k, v in backends.items()] if backends else []
-            agent_label = " · ".join(backend_bits) if backend_bits else "no agent"
+            agent_bits = [f"{k} v{v}" for k, v in agents.items()] if agents else []
+            agent_label = " · ".join(agent_bits) if agent_bits else "no agent"
         rate_chip = ""
         if s.rate_limits and s.rate_limits.text:
             colour = "yellow" if s.rate_limits.level == "warn" else "white"

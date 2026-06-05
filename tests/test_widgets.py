@@ -11,10 +11,13 @@ textual = pytest.importorskip("textual")
 from textual.app import App  # noqa: E402
 
 from blemees_tui import __version__ as _TUI_VERSION  # noqa: E402
-from blemees_tui.reducer import apply  # noqa: E402
-from blemees_tui.state import AppState, RateLimitsNotice, SessionState  # noqa: E402
+from blemees_tui.reducer import apply, apply_user_prompt  # noqa: E402
+from blemees_tui.state import (  # noqa: E402
+    AppState,
+    RateLimitsNotice,
+    SessionState,  # noqa: E402
+)
 from blemees_tui.widgets.banner import ConnectionBanner  # noqa: E402
-from blemees_tui.state import ToolUseBlock  # noqa: E402
 from blemees_tui.widgets.chat_pane import (  # noqa: E402
     ChatPaneWidget,
     _format_todowrite_summary,
@@ -46,23 +49,23 @@ async def test_chat_pane_incremental_mounts_one_widget_per_turn():
         chat = app.query_one("#chat", ChatPaneWidget)
         sess = SessionState(session_id="s1")
         # First turn
-        apply(
-            sess,
-            {
-                "type": "agent.user",
-                "session_id": "s1",
-                "seq": 1,
-                "message": {"role": "user", "content": "hi"},
-            },
-        )
+        apply_user_prompt(sess, "hi")
         chat.show_session(sess)
         await pilot.pause()
         first_blocks = list(chat.query(_TurnBlock))
         assert len(first_blocks) == 1
-        # A streaming delta on the same turn should NOT add a widget.
+        # A streaming chunk on the same turn should NOT add a widget.
         apply(
             sess,
-            {"type": "agent.delta", "session_id": "s1", "seq": 2, "kind": "text", "text": "hello"},
+            {
+                "type": "session.update",
+                "session_id": "s1",
+                "seq": 2,
+                "update": {
+                    "sessionUpdate": "agent_message_chunk",
+                    "content": {"type": "text", "text": "hello"},
+                },
+            },
         )
         chat.show_session(sess)
         await pilot.pause()
@@ -70,16 +73,11 @@ async def test_chat_pane_incremental_mounts_one_widget_per_turn():
         assert len(same_blocks) == 1
         assert same_blocks[0] is first_blocks[0]
         # A second turn should add exactly one new widget.
-        apply(sess, {"type": "agent.result", "session_id": "s1", "seq": 3, "subtype": "success"})
         apply(
             sess,
-            {
-                "type": "agent.user",
-                "session_id": "s1",
-                "seq": 4,
-                "message": {"role": "user", "content": "more"},
-            },
+            {"type": "session.result", "session_id": "s1", "seq": 3, "stop_reason": "end_turn"},
         )
+        apply_user_prompt(sess, "more")
         chat.show_session(sess)
         await pilot.pause()
         two_blocks = list(chat.query(_TurnBlock))
@@ -153,26 +151,10 @@ async def test_turn_status_shows_model_on_left_and_turns_on_right():
     sess = SessionState(session_id="s", model="claude-sonnet-4-5")
     # Two completed turns — the bar reports the count regardless of
     # whether a turn is currently in flight.
-    apply(
-        sess,
-        {
-            "type": "agent.user",
-            "session_id": "s",
-            "seq": 1,
-            "message": {"role": "user", "content": "hi"},
-        },
-    )
-    apply(sess, {"type": "agent.result", "session_id": "s", "seq": 2, "subtype": "success"})
-    apply(
-        sess,
-        {
-            "type": "agent.user",
-            "session_id": "s",
-            "seq": 3,
-            "message": {"role": "user", "content": "again"},
-        },
-    )
-    apply(sess, {"type": "agent.result", "session_id": "s", "seq": 4, "subtype": "success"})
+    apply_user_prompt(sess, "hi")
+    apply(sess, {"type": "session.result", "session_id": "s", "seq": 2, "stop_reason": "end_turn"})
+    apply_user_prompt(sess, "again")
+    apply(sess, {"type": "session.result", "session_id": "s", "seq": 4, "stop_reason": "end_turn"})
     state.sessions["s"] = sess
     state.active_session_id = "s"
     app = _TurnStatusOnlyApp(state)
@@ -211,25 +193,19 @@ async def test_turn_status_left_is_empty_when_session_has_no_model():
 async def test_turn_status_live_timer_replaces_model_on_left_during_turn():
     state = AppState()
     sess = SessionState(session_id="s", model="claude-sonnet-4-5")
-    apply(
-        sess,
-        {
-            "type": "agent.user",
-            "session_id": "s",
-            "seq": 1,
-            "message": {"role": "user", "content": "hi"},
-        },
-    )
-    # Stream a delta — turn_active flips True and the in-flight turn
+    apply_user_prompt(sess, "hi")
+    # Stream a chunk — turn_active stays True and the in-flight turn
     # accumulates text the bar can estimate tokens from.
     apply(
         sess,
         {
-            "type": "agent.delta",
+            "type": "session.update",
             "session_id": "s",
             "seq": 2,
-            "kind": "text",
-            "text": "hello world " * 10,
+            "update": {
+                "sessionUpdate": "agent_message_chunk",
+                "content": {"type": "text", "text": "hello world " * 10},
+            },
         },
     )
     state.sessions["s"] = sess
@@ -278,11 +254,20 @@ def test_format_todowrite_summary_returns_none_for_other_tools():
     assert _format_todowrite_summary("Bash", {"command": "ls"}) is None
 
 
+@pytest.mark.skip(reason="todos derive from ACP tool_call (plan) vocabulary — lands in #2")
 def test_latest_todos_walks_session_in_reverse():
     """``_latest_todos`` returns the most recent TodoWrite snapshot — newest
     turn wins, and within a turn the latest block wins."""
     sess = SessionState(session_id="s")
-    apply(sess, {"type": "agent.user", "session_id": "s", "seq": 1, "message": {"role": "user", "content": "go"}})
+    apply(
+        sess,
+        {
+            "type": "agent.user",
+            "session_id": "s",
+            "seq": 1,
+            "message": {"role": "user", "content": "go"},
+        },
+    )
     # Two TodoWrite calls within turn 1 — the second should win.
     apply(
         sess,
@@ -313,7 +298,15 @@ def test_latest_todos_walks_session_in_reverse():
 
 def test_latest_todos_returns_none_when_no_todowrite_calls():
     sess = SessionState(session_id="s")
-    apply(sess, {"type": "agent.user", "session_id": "s", "seq": 1, "message": {"role": "user", "content": "hi"}})
+    apply(
+        sess,
+        {
+            "type": "agent.user",
+            "session_id": "s",
+            "seq": 1,
+            "message": {"role": "user", "content": "hi"},
+        },
+    )
     assert _latest_todos(sess) is None
 
 
@@ -326,11 +319,20 @@ class _TodoPanelOnlyApp(App):
         yield TodoPanel(self._state, id="todos")
 
 
+@pytest.mark.skip(reason="todos derive from ACP tool_call (plan) vocabulary — lands in #2")
 @pytest.mark.asyncio
 async def test_todo_panel_renders_checklist_for_active_session():
     state = AppState()
     sess = SessionState(session_id="s")
-    apply(sess, {"type": "agent.user", "session_id": "s", "seq": 1, "message": {"role": "user", "content": "go"}})
+    apply(
+        sess,
+        {
+            "type": "agent.user",
+            "session_id": "s",
+            "seq": 1,
+            "message": {"role": "user", "content": "go"},
+        },
+    )
     apply(
         sess,
         {
@@ -342,7 +344,11 @@ async def test_todo_panel_renders_checklist_for_active_session():
             "input": {
                 "todos": [
                     {"content": "ship feature", "status": "completed"},
-                    {"content": "write tests", "activeForm": "Writing tests", "status": "in_progress"},
+                    {
+                        "content": "write tests",
+                        "activeForm": "Writing tests",
+                        "status": "in_progress",
+                    },
                     {"content": "polish docs", "status": "pending"},
                 ]
             },
@@ -387,7 +393,15 @@ async def test_todo_panel_hidden_when_every_item_completed():
     so the chat pane reclaims the row."""
     state = AppState()
     sess = SessionState(session_id="s")
-    apply(sess, {"type": "agent.user", "session_id": "s", "seq": 1, "message": {"role": "user", "content": "go"}})
+    apply(
+        sess,
+        {
+            "type": "agent.user",
+            "session_id": "s",
+            "seq": 1,
+            "message": {"role": "user", "content": "go"},
+        },
+    )
     apply(
         sess,
         {
@@ -423,8 +437,8 @@ async def test_footer_renders_errors_versions_and_rate_chips():
     state.active_session_id = "s"
     state.connection_status = "connected"
     state.rate_limits = RateLimitsNotice(level="warn", text="resets in 4m", session_id="s")
-    state.daemon.daemon = "blemees-agentd/0.9.2"
-    state.daemon.backends = {"claude": "2.1"}
+    state.daemon.daemon = "blemees-agentd/0.11.0"
+    state.daemon.agents = {"claude-agent-acp": "2.1"}
     app = _FooterOnlyApp(state)
     async with app.run_test() as pilot:
         footer = app.query_one("#footer", FooterStatusWidget)
@@ -439,8 +453,8 @@ async def test_footer_renders_errors_versions_and_rate_chips():
         # chat / text-area column.
         assert "blemees" in info
         assert _TUI_VERSION in info
+        # The active session's profile name ("claude") is shown in the info slot.
         assert "claude" in info
-        assert "2.1" in info
         assert "resets in 4m" in info
         # Errors are pinned to the right.
         assert "1 errors" in errors
@@ -460,17 +474,17 @@ async def test_chat_pane_renders_pending_errors():
         apply(
             sess,
             {
-                "type": "agent.error",
+                "type": "session.error",
                 "session_id": "s1",
-                "code": "auth_failed",
-                "message": "Claude session not authenticated",
+                "code": "auth_required",
+                "message": "agent not authenticated",
             },
         )
         chat.show_session(sess)
         await pilot.pause()
         assert chat._errors_widget is not None
         markup = str(chat._errors_widget.render())
-        assert "auth_failed" in markup
+        assert "auth_required" in markup
 
 
 @pytest.mark.asyncio
@@ -480,7 +494,7 @@ async def test_chat_pane_replay_gap_banner():
     async with app.run_test() as pilot:
         chat = app.query_one("#chat", ChatPaneWidget)
         sess = SessionState(session_id="s1")
-        apply(sess, {"type": "agent.replay_gap", "session_id": "s1"})
+        apply(sess, {"type": "replay_gap", "session_id": "s1"})
         chat.show_session(sess)
         await pilot.pause()
         assert chat._gap_widget is not None

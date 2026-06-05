@@ -25,7 +25,8 @@ classifiers = [
     "Topic :: Terminals",
 ]
 dependencies = [
-    "blemees-agent>=0.10.0",
+    "blemees-agent>=0.11.0",
+    "agent-client-protocol>=0.10",
     "textual>=0.80",
 ]
 

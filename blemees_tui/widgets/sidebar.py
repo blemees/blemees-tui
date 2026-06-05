@@ -59,9 +59,7 @@ class SidebarWidget(Widget):
             groups.setdefault(sess.cwd or "", []).append((idx, sid, sess))
 
         for cwd, members in groups.items():
-            live.mount(
-                Static(f"[dim]{_escape_markup(_format_cwd(cwd))}[/]", classes="cwd-header")
-            )
+            live.mount(Static(f"[dim]{_escape_markup(_format_cwd(cwd))}[/]", classes="cwd-header"))
             for idx, sid, sess in members:
                 icon = _mode_icon(sess.mode)
                 label = sess.title or sid[:8]
@@ -102,7 +100,7 @@ def _format_cwd(cwd: str) -> str:
     if cwd == home:
         return "~"
     if cwd.startswith(home + os.sep):
-        cwd = "~" + cwd[len(home):]
+        cwd = "~" + cwd[len(home) :]
     if len(cwd) <= 26:
         return cwd
     parts = cwd.split(os.sep)

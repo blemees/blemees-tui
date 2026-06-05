@@ -14,7 +14,7 @@ import pytest
 textual = pytest.importorskip("textual")
 
 from blemees_tui.app import BlemeesTuiApp  # noqa: E402
-from blemees_tui.reducer import apply  # noqa: E402
+from blemees_tui.reducer import apply, apply_user_prompt  # noqa: E402
 from blemees_tui.state import SessionMode, SessionState  # noqa: E402
 from blemees_tui.widgets import (  # noqa: E402
     ChatPaneWidget,
@@ -51,18 +51,18 @@ async def test_scene_mid_stream_turn_renders(isolated_state_dir):
         sess = SessionState(session_id="s1", backend="claude")
         app.state.sessions["s1"] = sess
         app.state.active_session_id = "s1"
+        apply_user_prompt(sess, "hi")
         apply(
             sess,
             {
-                "type": "agent.user",
+                "type": "session.update",
                 "session_id": "s1",
-                "seq": 1,
-                "message": {"role": "user", "content": "hi"},
+                "seq": 2,
+                "update": {
+                    "sessionUpdate": "agent_message_chunk",
+                    "content": {"type": "text", "text": "stream"},
+                },
             },
-        )
-        apply(
-            sess,
-            {"type": "agent.delta", "session_id": "s1", "seq": 2, "kind": "text", "text": "stream"},
         )
         app._refresh_ui()
         await pilot.pause()
@@ -130,16 +130,16 @@ async def test_scene_auth_failed_renders_inline_bubble(isolated_state_dir):
         app.state.active_session_id = "s2"
         app._handle_frame(
             {
-                "type": "agent.error",
+                "type": "session.error",
                 "session_id": "s2",
-                "code": "auth_failed",
+                "code": "auth_required",
                 "message": "session expired",
             }
         )
         await pilot.pause()
         chat = app.query_one("#chat", ChatPaneWidget)
         assert chat._errors_widget is not None
-        assert "auth_failed" in str(chat._errors_widget.render())
+        assert "auth_required" in str(chat._errors_widget.render())
         # Footer error chip reflects it (pinned to the right side).
         footer = app.query_one("#footer", FooterStatusWidget)
         footer.update_status()
@@ -155,7 +155,7 @@ async def test_scene_replay_gap_banner(isolated_state_dir):
         sess = SessionState(session_id="s3", backend="claude")
         app.state.sessions["s3"] = sess
         app.state.active_session_id = "s3"
-        app._handle_frame({"type": "agent.replay_gap", "session_id": "s3"})
+        app._handle_frame({"type": "replay_gap", "session_id": "s3"})
         await pilot.pause()
         chat = app.query_one("#chat", ChatPaneWidget)
         assert chat._gap_widget is not None

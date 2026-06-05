@@ -1,32 +1,38 @@
-"""Pure reducer: ``(SessionState, Frame) → SessionState`` (spec §4, §9).
+"""Pure reducer: ``(SessionState, Frame) → SessionState`` (blemees/3).
 
 The reducer is the single source of truth for transcript state. It mutates a
-``SessionState`` in place (instead of building new dataclasses for every
-frame) — the dataclasses are not frozen and mutation keeps streaming-delta
-hot paths cheap. Callers should treat the reducer's input as owned for the
-duration of the call.
+``SessionState`` in place — the dataclasses are not frozen and mutation keeps
+streaming-delta hot paths cheap. Callers treat the reducer's input as owned
+for the duration of the call.
 
-The reducer touches **only** the ``SessionState``. ``EventLog`` writes,
-sidebar refresh, and persistence are the connection layer's responsibility.
+It consumes ``blemees/3`` frames: ``session.update`` (a verbatim ACP
+``session/update`` payload), ``session.result``, ``session.opened``,
+``session.error``, and the per-session lifecycle notices. The user turn is
+*not* echoed by the daemon, so the app records it locally via
+:func:`apply_user_prompt`.
+
+This issue (#1) handles the text path — ``agent_message_chunk`` /
+``agent_thought_chunk``. The richer ``session/update`` variants (tool calls,
+plan, available commands, mode) are #2.
 """
 
 from __future__ import annotations
 
-import time
 from typing import Any
+
+from acp.schema import TextContent
 
 from .state import (
     SessionMode,
     SessionState,
     TextBlock,
     ThinkingBlock,
-    ToolUseBlock,
     Turn,
     Usage,
 )
 
 # ---------------------------------------------------------------------------
-# Public entry point
+# Public entry points
 # ---------------------------------------------------------------------------
 
 
@@ -53,27 +59,27 @@ def apply(state: SessionState, frame: dict[str, Any]) -> SessionState:
     return state
 
 
-# ---------------------------------------------------------------------------
-# Handlers — agent.* (unified vocabulary, spec §9)
-# ---------------------------------------------------------------------------
+def apply_user_prompt(state: SessionState, text: str) -> SessionState:
+    """Record a user turn the client just sent.
+
+    blemees/3 agents don't echo the user message back as a frame, so the TUI
+    appends the turn optimistically when it sends ``session.prompt``.
+    """
+    turn = Turn(user_text=text)
+    state.turns.append(turn)
+    state.turn_active = True
+    if not state.title and text:
+        state.title = " ".join(text.split())[:80]
+    return state
 
 
-def _on_system_init(state: SessionState, frame: dict[str, Any]) -> None:
-    if frame.get("model"):
-        state.model = frame["model"]
-    if frame.get("cwd"):
-        state.cwd = frame["cwd"]
-    cw = frame.get("context_window")
-    if isinstance(cw, int) and cw > 0:
-        state.context_window = cw
-    if frame.get("backend"):
-        state.backend = frame["backend"]
-    if not state.started_at_ms:
-        state.started_at_ms = int(time.time() * 1000)
+# ---------------------------------------------------------------------------
+# session.update — verbatim ACP session/update payload
+# ---------------------------------------------------------------------------
 
 
 def _ensure_active_turn(state: SessionState) -> Turn:
-    """Return the current in-flight turn, creating one if the backend skipped a user echo."""
+    """Return the current in-flight turn, creating one if needed."""
     if state.turns and not state.turns[-1].locked:
         return state.turns[-1]
     turn = Turn()
@@ -82,191 +88,69 @@ def _ensure_active_turn(state: SessionState) -> Turn:
     return turn
 
 
-def _on_user(state: SessionState, frame: dict[str, Any]) -> None:
-    msg = frame.get("message") or {}
-    content = msg.get("content")
-    text = ""
-    if isinstance(content, str):
-        text = content
-    elif isinstance(content, list):
-        # Concatenate text blocks; ignore images/attachments at v0.1.
-        chunks: list[str] = []
-        for block in content:
-            if isinstance(block, dict) and block.get("type") == "text":
-                chunks.append(str(block.get("text", "")))
-        text = "\n".join(chunks)
-    turn = Turn(user_text=text)
-    state.turns.append(turn)
-    state.turn_active = True
-    if not state.title and text:
-        # First-message-derived title (first 80 chars, whitespace-collapsed).
-        flat = " ".join(text.split())
-        state.title = flat[:80]
+def _content_text(content: Any) -> str:
+    """Extract text from an ACP content block, typed via the SDK model."""
+    if not isinstance(content, dict):
+        return ""
+    if content.get("type") == "text":
+        try:
+            return TextContent.model_validate(content).text
+        except Exception:
+            return str(content.get("text", "") or "")
+    return ""  # non-text blocks (image, resource, …) render in #2
 
 
-def _on_delta(state: SessionState, frame: dict[str, Any]) -> None:
-    kind = frame.get("kind")
-    text = frame.get("text", "")
-    if not text:
+def _append_streamed(turn: Turn, text: str, *, thinking: bool) -> None:
+    """Extend the open block of the matching kind, or open a fresh one."""
+    cls = ThinkingBlock if thinking else TextBlock
+    last = turn.blocks[-1] if turn.blocks else None
+    if isinstance(last, cls) and not last.finalized:
+        last.text += text
+    else:
+        turn.blocks.append(cls(text=text))
+
+
+def _on_session_update(state: SessionState, frame: dict[str, Any]) -> None:
+    update = frame.get("update")
+    if not isinstance(update, dict):
         return
-    turn = _ensure_active_turn(state)
-    # Only extend the *last* block when it's still the open block of the
-    # right kind. Searching the whole turn (the prior approach) routed
-    # text-after-a-tool deltas back into the *previous* text block, which
-    # then got squashed when ``agent.message`` reconciled.
-    if kind == "thinking":
-        last = turn.blocks[-1] if turn.blocks else None
-        if isinstance(last, ThinkingBlock) and not last.finalized:
-            last.text += text
-        else:
-            turn.blocks.append(ThinkingBlock(text=text))
-    elif kind == "text":
-        last = turn.blocks[-1] if turn.blocks else None
-        if isinstance(last, TextBlock) and not last.finalized:
-            last.text += text
-        else:
-            turn.blocks.append(TextBlock(text=text))
-    # tool_input deltas are ignored at v0.1 — agent.tool_use carries the
-    # final input dict and the daemon resolves partial_json before emitting.
+    kind = update.get("sessionUpdate")
+    if kind == "agent_message_chunk":
+        text = _content_text(update.get("content"))
+        if text:
+            _append_streamed(_ensure_active_turn(state), text, thinking=False)
+    elif kind == "agent_thought_chunk":
+        text = _content_text(update.get("content"))
+        if text:
+            _append_streamed(_ensure_active_turn(state), text, thinking=True)
+    # tool_call / tool_call_update / plan / available_commands_update /
+    # current_mode_update / user_message_chunk → full vocabulary is #2.
 
 
-def _on_message(state: SessionState, frame: dict[str, Any]) -> None:
-    """Reconcile the turn's blocks with this message's canonical content,
-    preserving inline order between text and tool_use items.
+def _map_usage(raw: dict[str, Any]) -> Usage:
+    """Map an ACP Usage payload to the TUI's Usage.
 
-    The wire shape (Anthropic-style content array) is e.g.::
-
-        [
-            {"type": "text", "text": "Reading the file."},
-            {"type": "tool_use", "id": "tu1", "name": "Read", "input": {...}},
-            {"type": "text", "text": "Now editing."},
-        ]
-
-    A turn typically receives several ``agent.message`` frames — one per
-    assistant message in a multi-step interaction (text → tool_use →
-    tool_result → text → tool_use → …). Each new message therefore
-    *appends* to the turn rather than replacing previously finalised
-    blocks. The previous implementation collapsed all text into a single
-    block at position 0 and bunched tool_use blocks at the tail, which
-    is what produced the "all text on top, all tools below" rendering
-    bug.
-
-    Streaming-delta interaction: ``agent.delta`` may have already created
-    open (not-yet-finalised) text/thinking blocks. The first text item in
-    this message finalises that open block; later text items in the same
-    message become fresh appended blocks. Tool_use blocks are deduped
-    against any already-present blocks by ``tool_use_id`` (preserves
-    ``result_text`` from a prior ``agent.tool_result``).
+    ACP reports camelCase (``inputTokens``, ``cachedReadTokens``, …); we read
+    those plus snake_case fallbacks so a partial payload (the SDK model marks
+    several fields required) never drops counts.
     """
-    content = frame.get("content")
-    if not isinstance(content, list):
-        return
-    turn = _ensure_active_turn(state)
 
-    existing_tools_by_id: dict[str, ToolUseBlock] = {
-        b.tool_use_id: b for b in turn.blocks if isinstance(b, ToolUseBlock)
-    }
+    def pick(*keys: str) -> int:
+        for k in keys:
+            if k in raw and raw[k] is not None:
+                try:
+                    return int(raw[k])
+                except (TypeError, ValueError):
+                    return 0
+        return 0
 
-    # The most recent NOT-yet-finalised text/thinking blocks belong to
-    # this message — the streaming buffer the deltas were filling in.
-    open_text = next(
-        (b for b in reversed(turn.blocks) if isinstance(b, TextBlock) and not b.finalized),
-        None,
+    return Usage(
+        input_tokens=pick("inputTokens", "input_tokens"),
+        output_tokens=pick("outputTokens", "output_tokens"),
+        cache_creation_input_tokens=pick("cachedWriteTokens", "cache_creation_input_tokens"),
+        cache_read_input_tokens=pick("cachedReadTokens", "cache_read_input_tokens"),
+        reasoning_output_tokens=pick("thoughtTokens", "reasoning_output_tokens"),
     )
-    open_thinking = next(
-        (b for b in reversed(turn.blocks) if isinstance(b, ThinkingBlock) and not b.finalized),
-        None,
-    )
-
-    for item in content:
-        if not isinstance(item, dict):
-            continue
-        item_type = item.get("type")
-
-        if item_type == "text":
-            text = str(item.get("text", "") or "")
-            if open_text is not None:
-                open_text.text = text
-                open_text.finalized = True
-                open_text = None  # only the first text item consumes it
-            else:
-                turn.blocks.append(TextBlock(text=text, finalized=True))
-
-        elif item_type == "thinking":
-            text = str(item.get("thinking") or item.get("text", "") or "")
-            if open_thinking is not None:
-                open_thinking.text = text
-                open_thinking.finalized = True
-                open_thinking = None
-            else:
-                turn.blocks.append(ThinkingBlock(text=text, finalized=True))
-
-        elif item_type == "tool_use":
-            tool_use_id = item.get("id") or item.get("tool_use_id")
-            if not isinstance(tool_use_id, str) or not tool_use_id:
-                continue
-            name = str(item.get("name", "") or "")
-            input_payload = item.get("input")
-            if tool_use_id in existing_tools_by_id:
-                existing = existing_tools_by_id[tool_use_id]
-                if name:
-                    existing.name = name
-                if input_payload is not None:
-                    existing.input = input_payload
-            else:
-                new_block = ToolUseBlock(
-                    tool_use_id=tool_use_id,
-                    name=name,
-                    input=input_payload,
-                )
-                turn.blocks.append(new_block)
-                existing_tools_by_id[tool_use_id] = new_block
-
-    # Any open text/thinking block that this message didn't carry text
-    # for still needs to be marked finalised so subsequent deltas open a
-    # fresh block instead of appending into a stale buffer.
-    if open_text is not None:
-        open_text.finalized = True
-    if open_thinking is not None:
-        open_thinking.finalized = True
-
-
-def _on_tool_use(state: SessionState, frame: dict[str, Any]) -> None:
-    tool_use_id = frame.get("tool_use_id") or ""
-    if not tool_use_id:
-        return
-    turn = _ensure_active_turn(state)
-    # Preserve the input shape verbatim — the renderer adapts per-type.
-    # Codex's exec_command sends a list (argv); Claude's tools send objects;
-    # some backends send strings. Coercing to dict() crashes on lists.
-    turn.blocks.append(
-        ToolUseBlock(
-            tool_use_id=tool_use_id,
-            name=str(frame.get("name", "")),
-            input=frame.get("input"),
-        )
-    )
-
-
-def _on_tool_result(state: SessionState, frame: dict[str, Any]) -> None:
-    tool_use_id = frame.get("tool_use_id") or ""
-    if not tool_use_id:
-        return
-    output = frame.get("output")
-    is_error = bool(frame.get("is_error", False))
-    text = _stringify_tool_output(output)
-    for turn in reversed(state.turns):
-        for block in turn.blocks:
-            if isinstance(block, ToolUseBlock) and block.tool_use_id == tool_use_id:
-                block.result_text = text
-                block.is_error = is_error
-                return
-
-
-def _on_notice(_state: SessionState, _frame: dict[str, Any]) -> None:
-    # The reducer is session-scoped; rate_limits/notices are app-level.
-    # The connection-layer pump in app.py forwards these to AppState.
-    return
 
 
 def _on_result(state: SessionState, frame: dict[str, Any]) -> None:
@@ -274,28 +158,46 @@ def _on_result(state: SessionState, frame: dict[str, Any]) -> None:
         return
     turn = state.turns[-1]
     turn.locked = True
-    turn.result_subtype = frame.get("subtype")
-    if turn.result_subtype == "error":
-        turn.error = dict(frame.get("error") or {})
-    if isinstance(frame.get("duration_ms"), int):
-        turn.duration_ms = frame["duration_ms"]
-    usage_raw = frame.get("usage") or {}
+    # ACP stop_reason: end_turn | cancelled | max_tokens | refusal | …
+    stop = frame.get("stop_reason")
+    turn.result_subtype = str(stop) if stop is not None else None
+    usage_raw = frame.get("usage")
     if isinstance(usage_raw, dict):
-        turn_usage = Usage(
-            input_tokens=int(usage_raw.get("input_tokens", 0) or 0),
-            output_tokens=int(usage_raw.get("output_tokens", 0) or 0),
-            cache_creation_input_tokens=int(usage_raw.get("cache_creation_input_tokens", 0) or 0),
-            cache_read_input_tokens=int(usage_raw.get("cache_read_input_tokens", 0) or 0),
-            reasoning_output_tokens=int(usage_raw.get("reasoning_output_tokens", 0) or 0),
-        )
+        turn_usage = _map_usage(usage_raw)
         turn.usage = turn_usage
         state.cumulative_usage = state.cumulative_usage.merge(turn_usage)
     state.turn_active = False
 
 
+def _on_session_error(state: SessionState, frame: dict[str, Any]) -> None:
+    code = str(frame.get("code", ""))
+    if code == "agent_crashed":
+        state.mode = SessionMode.CRASHED
+        state.crashed_reason = str(frame.get("message", ""))
+    state.pending_errors.append(dict(frame))
+
+
 # ---------------------------------------------------------------------------
-# Handlers — per-session blemees-agentd.* (spec §15)
+# Lifecycle / control frames
 # ---------------------------------------------------------------------------
+
+
+def _on_session_opened(state: SessionState, frame: dict[str, Any]) -> None:
+    """``session.opened`` carries the agent's metadata plus ``last_seq`` (the
+    daemon's high-water mark). If we're behind, open a replay window so the UI
+    shows a loading overlay until we catch up.
+    """
+    if frame.get("profile"):
+        state.backend = str(frame["profile"])  # repurposed label until #2/#3
+    if frame.get("model"):
+        state.model = str(frame["model"])
+    last_seq = frame.get("last_seq")
+    if not isinstance(last_seq, int) or last_seq <= state.last_seen_seq:
+        state.replay_target_seq = 0
+        state.replay_start_seq = 0
+        return
+    state.replay_target_seq = last_seq
+    state.replay_start_seq = state.last_seen_seq
 
 
 def _on_session_taken(state: SessionState, frame: dict[str, Any]) -> None:
@@ -304,7 +206,7 @@ def _on_session_taken(state: SessionState, frame: dict[str, Any]) -> None:
     state.taken_by_pid = int(pid) if isinstance(pid, int) else None
 
 
-def _on_session_closed(state: SessionState, frame: dict[str, Any]) -> None:
+def _on_session_closed_notice(state: SessionState, frame: dict[str, Any]) -> None:
     state.mode = SessionMode.CLOSED
     state.closed_reason = str(frame.get("reason", "owner_closed"))
 
@@ -313,30 +215,14 @@ def _on_replay_gap(state: SessionState, _frame: dict[str, Any]) -> None:
     state.replay_gap = True
 
 
-def _on_error(state: SessionState, frame: dict[str, Any]) -> None:
-    code = str(frame.get("code", ""))
-    if code == "backend_crashed":
-        state.mode = SessionMode.CRASHED
-        state.crashed_reason = str(frame.get("message", ""))
-    state.pending_errors.append(dict(frame))
-
-
 _KNOWN_WINDOW_TIERS = (200_000, 1_000_000, 2_000_000)
 
 
 def _round_up_window(tokens: int) -> int:
-    """Smallest known context-window tier that fits ``tokens``.
-
-    The daemon infers a session's window from the model id (200k by
-    default, 1M if the id carries an explicit ``-1m`` / ``[1m]`` marker).
-    That heuristic misses 1M-beta sessions whose id lacks the marker, so
-    when the TUI observes a turn that exceeded the inferred window we
-    upgrade to the next plausible tier ourselves.
-    """
     for tier in _KNOWN_WINDOW_TIERS:
         if tokens <= tier:
             return tier
-    return tokens  # exceeded the largest known tier — accept the observation
+    return tokens
 
 
 def _on_session_info_reply(state: SessionState, frame: dict[str, Any]) -> None:
@@ -373,75 +259,17 @@ def _on_session_info_reply(state: SessionState, frame: dict[str, Any]) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _on_open_or_watch_ack(state: SessionState, frame: dict[str, Any]) -> None:
-    """``agent.opened`` / ``agent.watching`` carry ``last_seq`` — the
-    daemon's current high-water mark. If we're behind, start a replay
-    progress window so the UI can render a loading overlay until we catch
-    up. Brand-new sessions report ``last_seq:0`` (or absent) and skip.
-    """
-    last_seq = frame.get("last_seq")
-    if not isinstance(last_seq, int) or last_seq <= state.last_seen_seq:
-        # Caught up or nothing to replay — make sure we're not stuck in a
-        # stale loading state from a prior reconnect.
-        state.replay_target_seq = 0
-        state.replay_start_seq = 0
-        return
-    state.replay_target_seq = last_seq
-    state.replay_start_seq = state.last_seen_seq
-
-
 _HANDLERS = {
-    "agent.system_init": _on_system_init,
-    "agent.user": _on_user,
-    "agent.user_echo": lambda *_: None,  # Spec §7.2: TUI never relies on user_echo.
-    "agent.delta": _on_delta,
-    "agent.message": _on_message,
-    "agent.tool_use": _on_tool_use,
-    "agent.tool_result": _on_tool_result,
-    "agent.notice": _on_notice,
-    "agent.result": _on_result,
-    "agent.opened": _on_open_or_watch_ack,
-    "agent.watching": _on_open_or_watch_ack,
-    "agent.session_taken": _on_session_taken,
-    "agent.session_closed": _on_session_closed,
-    "agent.replay_gap": _on_replay_gap,
-    "agent.session_info_reply": _on_session_info_reply,
-    "agent.error": _on_error,
+    "session.update": _on_session_update,
+    "session.result": _on_result,
+    "session.error": _on_session_error,
+    "session.opened": _on_session_opened,
+    "session.attached": _on_session_opened,  # same replay-window logic
+    "session.taken": _on_session_taken,
+    "session.closed_notice": _on_session_closed_notice,
+    "replay_gap": _on_replay_gap,
+    "session.info_reply": _on_session_info_reply,
 }
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _last_block_of_type(turn: Turn, cls: type):
-    for block in reversed(turn.blocks):
-        if isinstance(block, cls):
-            return block
-    return None
-
-
-def _join_text_blocks(content: list[Any]) -> str:
-    chunks: list[str] = []
-    for block in content:
-        if isinstance(block, dict) and block.get("type") == "text":
-            chunks.append(str(block.get("text", "")))
-    return "".join(chunks)
-
-
-def _stringify_tool_output(output: Any) -> str:
-    if output is None:
-        return ""
-    if isinstance(output, str):
-        return output
-    if isinstance(output, list):
-        chunks: list[str] = []
-        for block in output:
-            if isinstance(block, dict):
-                if block.get("type") == "text":
-                    chunks.append(str(block.get("text", "")))
-                elif "text" in block:
-                    chunks.append(str(block["text"]))
-        return "\n".join(chunks)
-    return str(output)
+__all__ = ["apply", "apply_user_prompt"]

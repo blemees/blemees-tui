@@ -15,6 +15,8 @@ import itertools
 import random
 import string
 
+import pytest
+
 from blemees_tui.reducer import apply
 from blemees_tui.state import SessionState, ToolUseBlock, Usage
 
@@ -124,6 +126,7 @@ def test_last_seq_strictly_monotone():
     assert sess.last_seq == 50
 
 
+@pytest.mark.skip(reason="tool_use/tool_result pairing is the ACP tool vocabulary — lands in #2")
 def test_tool_use_pairs_with_result_across_orderings():
     """Even when several tool_uses interleave, each tool_result lands on
     its matching block."""
