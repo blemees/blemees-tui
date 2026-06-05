@@ -96,6 +96,9 @@ class FooterStatusWidget(Widget):
         if active is not None and active.backend:
             # blemees/3: a session's `backend` field carries its profile name.
             agent_label = active.backend
+            # Append the agent's current mode (ACP current_mode_update, #2).
+            if active.current_mode:
+                agent_label += f" · {active.current_mode}"
         else:
             agent_bits = [f"{k} v{v}" for k, v in agents.items()] if agents else []
             agent_label = " · ".join(agent_bits) if agent_bits else "no agent"

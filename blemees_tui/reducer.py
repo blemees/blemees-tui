@@ -27,6 +27,7 @@ from .state import (
     SessionState,
     TextBlock,
     ThinkingBlock,
+    ToolUseBlock,
     Turn,
     Usage,
 )
@@ -110,6 +111,36 @@ def _append_streamed(turn: Turn, text: str, *, thinking: bool) -> None:
         turn.blocks.append(cls(text=text))
 
 
+def _find_tool(state: SessionState, tool_call_id: str) -> ToolUseBlock | None:
+    for turn in reversed(state.turns):
+        for block in turn.blocks:
+            if isinstance(block, ToolUseBlock) and block.tool_use_id == tool_call_id:
+                return block
+    return None
+
+
+def _tool_content_text(content: Any) -> str:
+    """Flatten ACP ToolCallContent[] into display text (#2).
+
+    Each item is ``{type: "content"|"diff"|"terminal", …}``. We surface the
+    text-bearing parts; richer diff/terminal rendering can deepen later.
+    """
+    if not isinstance(content, list):
+        return ""
+    parts: list[str] = []
+    for item in content:
+        if not isinstance(item, dict):
+            continue
+        if item.get("type") == "content":
+            parts.append(_content_text(item.get("content")))
+        elif item.get("type") == "diff":
+            path = item.get("path", "")
+            parts.append(f"diff: {path}" if path else "diff")
+        elif item.get("type") == "terminal":
+            parts.append(_content_text(item.get("content")) or "terminal output")
+    return "\n".join(p for p in parts if p)
+
+
 def _on_session_update(state: SessionState, frame: dict[str, Any]) -> None:
     update = frame.get("update")
     if not isinstance(update, dict):
@@ -123,8 +154,88 @@ def _on_session_update(state: SessionState, frame: dict[str, Any]) -> None:
         text = _content_text(update.get("content"))
         if text:
             _append_streamed(_ensure_active_turn(state), text, thinking=True)
-    # tool_call / tool_call_update / plan / available_commands_update /
-    # current_mode_update / user_message_chunk → full vocabulary is #2.
+    elif kind == "tool_call":
+        _on_tool_call(state, update)
+    elif kind == "tool_call_update":
+        _on_tool_call_update(state, update)
+    elif kind == "plan":
+        state.plan = _plan_entries(update.get("entries"))
+    elif kind == "available_commands_update":
+        state.available_commands = _commands(update.get("availableCommands"))
+    elif kind == "current_mode_update":
+        mode_id = update.get("currentModeId")
+        if isinstance(mode_id, str):
+            state.current_mode = mode_id
+    # user_message_chunk (echoed user turns on replay) is recorded locally
+    # via apply_user_prompt, so it's ignored here.
+
+
+def _on_tool_call(state: SessionState, update: dict[str, Any]) -> None:
+    tool_call_id = update.get("toolCallId")
+    if not isinstance(tool_call_id, str) or not tool_call_id:
+        return
+    turn = _ensure_active_turn(state)
+    existing = _find_tool(state, tool_call_id)
+    block = existing or ToolUseBlock(tool_call_id, name="", input=None)
+    block.title = str(update.get("title") or block.title)
+    block.name = block.title or str(update.get("kind") or block.name)
+    block.kind = str(update.get("kind") or block.kind)
+    if update.get("status"):
+        block.status = str(update["status"])
+    if update.get("rawInput") is not None:
+        block.input = update["rawInput"]
+    content_text = _tool_content_text(update.get("content"))
+    if content_text:
+        block.result_text = content_text
+    if existing is None:
+        turn.blocks.append(block)
+
+
+def _on_tool_call_update(state: SessionState, update: dict[str, Any]) -> None:
+    tool_call_id = update.get("toolCallId")
+    if not isinstance(tool_call_id, str):
+        return
+    block = _find_tool(state, tool_call_id)
+    if block is None:
+        # An update before the start — synthesize the block so we don't drop it.
+        _on_tool_call(state, update)
+        return
+    if update.get("status"):
+        block.status = str(update["status"])
+        block.is_error = block.status == "failed"
+    if update.get("title"):
+        block.title = str(update["title"])
+    if update.get("rawInput") is not None:
+        block.input = update["rawInput"]
+    content_text = _tool_content_text(update.get("content"))
+    if content_text:
+        block.result_text = content_text
+
+
+def _plan_entries(entries: Any) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    if isinstance(entries, list):
+        for e in entries:
+            if isinstance(e, dict) and e.get("content"):
+                out.append(
+                    {
+                        "content": str(e.get("content", "")),
+                        "status": str(e.get("status", "pending")),
+                        "priority": str(e.get("priority", "medium")),
+                    }
+                )
+    return out
+
+
+def _commands(commands: Any) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    if isinstance(commands, list):
+        for c in commands:
+            if isinstance(c, dict) and c.get("name"):
+                out.append(
+                    {"name": str(c["name"]), "description": str(c.get("description", "") or "")}
+                )
+    return out
 
 
 def _map_usage(raw: dict[str, Any]) -> Usage:

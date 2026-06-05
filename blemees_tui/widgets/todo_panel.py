@@ -1,8 +1,8 @@
-"""Active to-do list panel — pinned above the composer.
+"""Active plan panel — pinned above the composer.
 
-Surfaces the most recent ``TodoWrite`` / ``todo_write`` tool call from
-the active session as a checklist. Updates as the agent calls TodoWrite
-again during a turn. Hidden when the active session has no todos yet.
+Surfaces the active session's ACP ``plan`` (the agent's task list, #2) as a
+checklist. Updates as the agent emits ``plan`` session updates. Hidden when
+the active session has no plan yet.
 
 Detail rendering lives here rather than inline in the chat transcript so
 the working list stays visible regardless of scroll position — that's
@@ -13,9 +13,7 @@ from __future__ import annotations
 
 from textual.widgets import Static
 
-from ..state import AppState, SessionState, ToolUseBlock
-
-_TODOWRITE_TOOL_NAMES = frozenset({"TodoWrite", "todo_write"})
+from ..state import AppState, SessionState
 
 
 class TodoPanel(Static):
@@ -67,20 +65,10 @@ def _all_completed(todos: list) -> bool:
 
 
 def _latest_todos(session: SessionState | None) -> list | None:
-    """Most recent TodoWrite snapshot in the session — newest turn first,
-    newest block within the turn first. Returns ``None`` if the session
-    has never called TodoWrite."""
-    if session is None:
+    """The active session's ACP plan entries, or ``None`` if it has none."""
+    if session is None or not session.plan:
         return None
-    for turn in reversed(session.turns):
-        for block in reversed(turn.blocks):
-            if isinstance(block, ToolUseBlock) and block.name in _TODOWRITE_TOOL_NAMES:
-                value = block.input
-                if isinstance(value, dict):
-                    todos = value.get("todos")
-                    if isinstance(todos, list):
-                        return todos
-    return None
+    return session.plan
 
 
 def _render_items(todos: list) -> str:

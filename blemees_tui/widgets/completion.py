@@ -68,6 +68,9 @@ class CompletionPopup(Vertical):
         super().__init__(**kwargs)
         self.add_class("-hidden")
         self._all_slash: list[Suggestion] = []
+        # Slash commands advertised by the active agent via ACP
+        # available_commands_update (#2); preferred over the filesystem walk.
+        self._agent_slash: list[Suggestion] = []
         self._all_tui: list[Suggestion] = _tui_suggestions()
         self._matches: list[Suggestion] = []
         self._selected: int = 0
@@ -97,7 +100,23 @@ class CompletionPopup(Vertical):
         self._repaint()
         self._show()
 
+    def set_agent_commands(self, commands: list[dict]) -> None:
+        """Set the active session's ACP available_commands (#2)."""
+        self._agent_slash = [
+            Suggestion(
+                f"/{c['name']}" if not str(c["name"]).startswith("/") else str(c["name"]),
+                str(c.get("description", "") or ""),
+                "agent",
+            )
+            for c in commands
+            if isinstance(c, dict) and c.get("name")
+        ]
+
     def _slash_pool(self) -> list[Suggestion]:
+        # The agent's advertised commands take precedence; fall back to the
+        # filesystem skill walk when the agent advertised none.
+        if self._agent_slash:
+            return self._agent_slash
         if not self._all_slash:
             # Lazy first call — filesystem walks are cheap (<5ms typically)
             # but we still defer until needed.
