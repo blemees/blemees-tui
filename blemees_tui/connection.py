@@ -1,21 +1,19 @@
-"""Connection layer (spec §6).
+"""Connection layer — ``blemees/3`` wire protocol.
 
-A direct ``asyncio`` implementation of the ``blemees-agent/1`` wire protocol
-(rather than a thin wrap around ``blemees.client.BlemeesClient``) — the TUI
-needs control over multi-session multiplexing, watch/unwatch frames, and the
-``list_sessions{live:true}`` filter that the reference client doesn't expose
-at the high level.
+A direct ``asyncio`` implementation of the ``blemees/3`` wire protocol toward
+``blemees-agentd`` (the ACP supervisor). The TUI needs control over
+multi-session multiplexing, owner/viewer attach, and registry-backed listing,
+so it speaks the socket directly rather than wrapping ``BlemeesClient``.
 
 Responsibilities:
 
 * One Unix-socket connection at a time.
-* Per-``session_id`` inbox queues + a watcher inbox.
 * Reconnect with backoff (1s → 30s, ×1.5, ±20%, indefinite).
 * Liveness ``ping`` every 15s while idle.
 * Central event-log feed for the TUI's observability surfaces.
 
 Frame dispatch follows the reducer's contract: this module forwards every
-``agent.*`` and per-session ``blemees-agentd.*`` frame to the active reducer pump
+``session.*`` frame (and connection-level replies) to the active reducer pump
 via the ``on_frame`` callback the app registers.
 """
 
@@ -177,14 +175,16 @@ class Connection:
         self,
         session_id: str,
         *,
-        backend: str,
+        profile: str | None = None,
+        agent: str | None = None,
         options: dict[str, Any] | None = None,
         last_seen_seq: int = 0,
     ) -> None:
         self._tracked[session_id] = {
             "kind": "owned",
             "session_id": session_id,
-            "backend": backend,
+            "profile": profile,
+            "agent": agent,
             "options": dict(options or {}),
             "last_seen_seq": int(last_seen_seq),
         }
@@ -206,89 +206,91 @@ class Connection:
             )
 
     # ------------------------------------------------------------------
-    # Verbs (spec §16, §7)
+    # Verbs (blemees/3 — spec §9)
     # ------------------------------------------------------------------
 
     async def open_session(
         self,
         session_id: str,
         *,
-        backend: str,
+        profile: str | None = None,
+        agent: str | None = None,
         options: dict[str, Any] | None = None,
         resume: bool = False,
         last_seen_seq: int | None = None,
         alias: str | None = None,
     ) -> dict[str, Any]:
+        # blemees/3: a session opens under a (profile, agent); the agent's
+        # config lives in the daemon. `options` is a flat dict (e.g. cwd).
         frame: dict[str, Any] = {
-            "type": "agent.open",
+            "type": "session.open",
             "session_id": session_id,
-            "backend": backend,
-            "options": {backend: dict(options or {})},
+            "options": dict(options or {}),
         }
+        if profile is not None:
+            frame["profile"] = profile
+        if agent is not None:
+            frame["agent"] = agent
         if resume:
             frame["resume"] = True
         if last_seen_seq is not None:
             frame["last_seen_seq"] = int(last_seen_seq)
         if alias:
             frame["alias"] = alias
-        return await self._request(frame, ack_types=("agent.opened",))
+        return await self._request(frame, ack_types=("session.opened",))
 
-    async def watch_session(
+    async def attach_session(
         self,
         session_id: str,
         *,
+        as_role: str = "viewer",
         last_seen_seq: int = 0,
     ) -> dict[str, Any]:
+        # Owner takeover or read-only viewer (#19/#3). Replaces watch/unwatch.
         frame = {
-            "type": "agent.watch",
+            "type": "session.attach",
             "session_id": session_id,
+            "as": as_role,
             "last_seen_seq": int(last_seen_seq),
         }
-        return await self._request(frame, ack_types=("agent.watching",))
+        return await self._request(frame, ack_types=("session.attached",))
 
-    async def unwatch(self, session_id: str) -> dict[str, Any]:
+    async def detach_session(self, session_id: str) -> dict[str, Any]:
         return await self._request(
-            {"type": "agent.unwatch", "session_id": session_id},
-            ack_types=("agent.unwatched",),
+            {"type": "session.detach", "session_id": session_id},
+            ack_types=("session.detached",),
         )
 
     async def close_session(self, session_id: str, *, delete: bool = False) -> dict[str, Any]:
         return await self._request(
-            {"type": "agent.close", "session_id": session_id, "delete": bool(delete)},
-            ack_types=("agent.closed",),
+            {"type": "session.close", "session_id": session_id, "delete": bool(delete)},
+            ack_types=("session.closed",),
         )
 
     async def interrupt(self, session_id: str) -> None:
-        await self._send({"type": "agent.interrupt", "session_id": session_id})
+        await self._send({"type": "session.cancel", "session_id": session_id})
 
     async def send_user(self, session_id: str, text: str) -> None:
-        await self._send(
-            {
-                "type": "agent.user",
-                "session_id": session_id,
-                "message": {"role": "user", "content": text},
-            }
-        )
+        # blemees/3 session.prompt carries `prompt` directly (string or ACP
+        # content-block array). The daemon does not echo the user turn back.
+        await self._send({"type": "session.prompt", "session_id": session_id, "prompt": text})
 
     async def list_sessions(
         self,
         *,
         cwd: str | None = None,
-        live: bool | None = None,
     ) -> list[dict[str, Any]]:
-        frame: dict[str, Any] = {"type": "agent.list_sessions"}
+        frame: dict[str, Any] = {"type": "session.list"}
         if cwd is not None:
             frame["cwd"] = cwd
-        if live is not None:
-            frame["live"] = bool(live)
-        reply = await self._request(frame, ack_types=("agent.sessions",))
+        reply = await self._request(frame, ack_types=("sessions",))
         sessions = reply.get("sessions") or []
         return list(sessions) if isinstance(sessions, list) else []
 
     async def session_info(self, session_id: str) -> dict[str, Any]:
         return await self._request(
-            {"type": "agent.session_info", "session_id": session_id},
-            ack_types=("agent.session_info_reply",),
+            {"type": "session.info", "session_id": session_id},
+            ack_types=("session.info_reply",),
         )
 
     # ------------------------------------------------------------------
@@ -309,7 +311,7 @@ class Connection:
             reply = await fut
         finally:
             self._pending.pop(req_id, None)
-        if reply.get("type") == "agent.error":
+        if reply.get("type") == "error":
             raise ConnectionError_(f"{reply.get('code', '')}: {reply.get('message', '')}")
         return reply
 
@@ -367,13 +369,13 @@ class Connection:
         self._writer = writer
         await self._send(
             {
-                "type": "agent.hello",
+                "type": "hello",
                 "client": CLIENT_NAME,
                 "protocol": PROTOCOL_VERSION,
             }
         )
         ack = await self._read_one()
-        if ack.get("type") != "agent.hello_ack":
+        if ack.get("type") != "hello_ack":
             if ack.get("code") == "protocol_mismatch":
                 raise FatalProtocolError(ack.get("message", "protocol mismatch"))
             raise ConnectionError_(f"unexpected hello ack: {ack!r}")
@@ -393,14 +395,16 @@ class Connection:
                 if entry["kind"] == "owned":
                     await self.open_session(
                         entry["session_id"],
-                        backend=entry.get("backend", ""),
+                        profile=entry.get("profile"),
+                        agent=entry.get("agent"),
                         options=entry.get("options") or {},
                         resume=True,
                         last_seen_seq=entry.get("last_seen_seq", 0),
                     )
                 else:
-                    await self.watch_session(
+                    await self.attach_session(
                         entry["session_id"],
+                        as_role="viewer",
                         last_seen_seq=entry.get("last_seen_seq", 0),
                     )
             except ConnectionError_ as exc:
@@ -452,7 +456,7 @@ class Connection:
         req_id = frame.get("id")
         if isinstance(req_id, str) and req_id in self._pending:
             pending = self._pending[req_id]
-            if ftype in pending.types or ftype == "agent.error":
+            if ftype in pending.types or ftype == "error":
                 if not pending.fut.done():
                     pending.fut.set_result(frame)
         # 2. Track seq for tracked sessions.
@@ -478,7 +482,7 @@ class Connection:
             if idle < self._idle_threshold:
                 continue
             try:
-                await self._send({"type": "agent.ping"})
+                await self._send({"type": "ping"})
             except (OSError, ConnectionError_):
                 return
 

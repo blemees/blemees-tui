@@ -11,6 +11,6 @@ except _metadata.PackageNotFoundError:
     __version__ = "0.0.0+unknown"
 
 CLIENT_NAME = f"blemees-tui/{__version__}"
-PROTOCOL_VERSION = "blemees-agent/1"
+PROTOCOL_VERSION = "blemees/3"
 
 __all__ = ["__version__", "CLIENT_NAME", "PROTOCOL_VERSION"]

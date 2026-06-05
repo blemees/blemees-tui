@@ -30,17 +30,25 @@ async def test_take_ownership_flips_mode_and_tracks(isolated_state_dir, monkeypa
     open_calls: list[dict] = []
 
     async def fake_open(
-        self, session_id, *, backend, options=None, resume=False, last_seen_seq=None
+        self,
+        session_id,
+        *,
+        profile=None,
+        agent=None,
+        options=None,
+        resume=False,
+        last_seen_seq=None,
+        alias=None,
     ):
         open_calls.append(
             {
                 "session_id": session_id,
-                "backend": backend,
+                "profile": profile,
                 "resume": resume,
                 "last_seen_seq": last_seen_seq,
             }
         )
-        return {"type": "agent.opened", "session_id": session_id, "last_seq": 0}
+        return {"type": "session.opened", "session_id": session_id, "last_seq": 0}
 
     monkeypatch.setattr("blemees_tui.connection.Connection.open_session", fake_open)
 
@@ -57,7 +65,7 @@ async def test_take_ownership_flips_mode_and_tracks(isolated_state_dir, monkeypa
 
         assert sess.mode == SessionMode.OWNED
         assert open_calls == [
-            {"session_id": "sid_w", "backend": "claude", "resume": True, "last_seen_seq": 42}
+            {"session_id": "sid_w", "profile": "claude", "resume": True, "last_seen_seq": 42}
         ]
         assert "sid_w" in app._connection._tracked
         assert app._connection._tracked["sid_w"]["kind"] == "owned"
@@ -78,7 +86,7 @@ async def test_session_closed_frame_drops_session(isolated_state_dir, monkeypatc
 
         app._handle_frame(
             {
-                "type": "agent.session_closed",
+                "type": "session.closed_notice",
                 "session_id": "sid1",
                 "reason": "owner_closed",
             }
