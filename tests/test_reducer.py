@@ -310,3 +310,25 @@ def test_current_mode_update_sets_mode():
     s = _new()
     apply(s, _update(1, {"sessionUpdate": "current_mode_update", "currentModeId": "plan"}))
     assert s.current_mode == "plan"
+
+
+# ---- #3: view_only + needs_attention -------------------------------
+
+
+def test_opened_sets_view_only():
+    s = _new()
+    apply(s, {"type": "session.opened", "session_id": "s1", "view_only": True})
+    assert s.view_only is True
+
+
+def test_needs_attention_then_cleared():
+    s = _new()
+    apply(
+        s,
+        {"type": "session.needs_attention", "session_id": "s1", "reason": "permission_pending"},
+    )
+    assert s.needs_attention is True
+    assert s.attention_reason == "permission_pending"
+    apply(s, {"type": "session.attention_cleared", "session_id": "s1"})
+    assert s.needs_attention is False
+    assert s.attention_reason is None

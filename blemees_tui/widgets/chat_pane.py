@@ -500,6 +500,8 @@ class ChatPaneWidget(Widget):
             target = "detached"
         elif session.mode == SessionMode.CLOSED:
             target = "closed"
+        elif session.view_only:
+            target = "view_only"
 
         if target == self._banner_state:
             if target and self._banner is not None:
@@ -775,6 +777,11 @@ def _banner_text(session: SessionState, mode: str) -> str:
         when = _fmt_clock_ms(session.last_active_at_ms)
         reason = session.closed_reason or "owner_closed"
         return f"[reverse red] ✓ Closed [/]  by {reason} at {when}"
+    if mode == "view_only":
+        return (
+            "[reverse yellow] 🔒 View-only [/]  history is viewable but the agent "
+            "couldn't reload this session — a new prompt would start fresh"
+        )
     return ""
 
 
