@@ -496,6 +496,8 @@ class BlemeesTuiApp(App):
                 chat = self.query_one("#chat", ChatPaneWidget)
                 self.call_after_refresh(chat.scroll_to_permission)
             except Exception:
+                # The chat pane may not be mounted yet (early activation);
+                # the scroll is a convenience, so a miss is harmless.
                 pass
 
     def _refresh_header(self) -> None:
