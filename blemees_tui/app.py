@@ -22,7 +22,7 @@ from textual.widgets import Static
 from . import __version__
 from .commands import is_uuid as is_command_uuid, parse as parse_command
 from .config import Config, apply_cli_overrides, load_config
-from .connection import Connection, ConnectionStatus
+from .connection import Connection, ConnectionError_, ConnectionStatus
 from .persistence import (
     StoredSession,
     configure_logger,
@@ -700,8 +700,12 @@ class BlemeesTuiApp(App):
         self.push_screen(DebugPane(self._debug_frames))
 
     def action_new_session(self) -> None:
-        profiles = list(self.state.daemon.profiles) or ["default"]
-        self.push_screen(NewSessionModal(profiles, default_cwd=os.getcwd()))
+        async def _fetch_profiles() -> list[dict[str, Any]]:
+            if self._connection is None:
+                return [{"name": n, "source": "config"} for n in self.state.daemon.profiles]
+            return await self._connection.list_profiles()
+
+        self.push_screen(NewSessionModal(_fetch_profiles, default_cwd=os.getcwd()))
 
     def action_attach(self) -> None:
         async def _fetch() -> list[dict[str, Any]]:
@@ -837,20 +841,15 @@ class BlemeesTuiApp(App):
     # Modal results
     # ------------------------------------------------------------------
 
-    async def on_new_session_modal_submit(self, msg: NewSessionModal.Submit) -> None:
+    async def on_new_session_modal_open_session(self, msg: NewSessionModal.OpenSession) -> None:
         if self._connection is None:
             return
         sid = str(uuid.uuid4())
-        # blemees/3: the selected value is a profile; the agent's model is the
-        # profile's concern, so it isn't an open-time option (cwd still is).
-        profile = msg.backend or "default"
-        options: dict[str, Any] = dict(msg.options or {})
-        if msg.cwd and "cwd" not in options:
-            options["cwd"] = msg.cwd
+        profile = msg.profile or "default"
+        options: dict[str, Any] = {"cwd": msg.cwd} if msg.cwd else {}
         sess = SessionState(
             session_id=sid,
             backend=profile,
-            model=msg.model,
             cwd=msg.cwd,
             title=msg.title,
             options=options,
@@ -861,10 +860,7 @@ class BlemeesTuiApp(App):
         self._connection.track_owned(sid, profile=profile, options=options)
         try:
             await self._connection.open_session(
-                sid,
-                profile=profile,
-                options=options,
-                alias=msg.title or None,
+                sid, profile=profile, options=options, alias=msg.title or None
             )
         except Exception as exc:
             self.state.event_log.append(
@@ -873,17 +869,47 @@ class BlemeesTuiApp(App):
             self.state.sessions.pop(sid, None)
             self._connection.untrack(sid)
             self._set_active_session(None)
-            self._persist_sessions()
+        self._persist_sessions()
+        self._refresh_ui()
+
+    async def on_new_session_modal_save_profile(self, msg: NewSessionModal.SaveProfile) -> None:
+        if self._connection is None:
+            return
+        # Create, falling back to update if the profile already exists (#25/#5).
+        try:
+            try:
+                await self._connection.create_profile(msg.name, msg.spec)
+            except ConnectionError_ as exc:
+                if "profile_exists" in str(exc):
+                    await self._connection.update_profile(msg.name, msg.spec)
+                else:
+                    raise
+        except ConnectionError_ as exc:
+            # agent_unavailable / profile_protected / … surface, don't crash.
+            self.state.event_log.append(
+                EventLogSource.DAEMON_ERROR, "profile_save_failed", str(exc)
+            )
+            self.notify(f"Profile {msg.name!r} not saved: {exc}", severity="error")
             self._refresh_ui()
             return
-        if msg.peer_mcp_attached:
-            interval = (msg.peer_poll_interval or "15m").strip() or "15m"
-            bootstrap = f"/loop {interval} check your peer inbox"
-            if sess.turn_active:
-                sess.pending_sends.append(bootstrap)
-            else:
-                await self._send_user_message(sid, bootstrap)
-        self._persist_sessions()
+        self.state.event_log.append(EventLogSource.CONNECTION, "profile_saved", msg.name)
+        self.notify(f"Profile {msg.name!r} saved.")
+        self._refresh_ui()
+
+    async def on_new_session_modal_delete_profile(self, msg: NewSessionModal.DeleteProfile) -> None:
+        if self._connection is None:
+            return
+        try:
+            await self._connection.delete_profile(msg.name)
+        except ConnectionError_ as exc:
+            self.state.event_log.append(
+                EventLogSource.DAEMON_ERROR, "profile_delete_failed", str(exc)
+            )
+            self.notify(f"Profile {msg.name!r} not deleted: {exc}", severity="error")
+            self._refresh_ui()
+            return
+        self.state.event_log.append(EventLogSource.CONNECTION, "profile_deleted", msg.name)
+        self.notify(f"Profile {msg.name!r} deleted.")
         self._refresh_ui()
 
     # ------------------------------------------------------------------
