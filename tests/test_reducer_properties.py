@@ -1,11 +1,11 @@
-"""Reducer invariants (§17.1).
+"""Reducer invariants — blemees/3 (#1/#2).
 
-Light-touch property checks (no hypothesis dep): generated frame
+Light-touch property checks (no hypothesis dep): generated session.update
 sequences exercise the reducer's hot path. Asserts the contract:
 
-* Every turn ends with ``agent.result`` (locked == True).
+* Every turn ends with ``session.result`` (locked == True).
 * ``last_seq`` is strictly monotone.
-* ``tool_use`` / ``tool_result`` pair across reorderings.
+* ``tool_call`` / ``tool_call_update`` pair by tool_call_id across reorderings.
 * ``Usage.merge`` is associative.
 """
 
@@ -15,10 +15,12 @@ import itertools
 import random
 import string
 
-import pytest
-
-from blemees_tui.reducer import apply
+from blemees_tui.reducer import apply, apply_user_prompt
 from blemees_tui.state import SessionState, ToolUseBlock, Usage
+
+
+def _update(sess: SessionState, seq: int, update: dict) -> None:
+    apply(sess, {"type": "session.update", "session_id": "prop", "seq": seq, "update": update})
 
 
 def _seq_counter(start=0):
@@ -33,63 +35,42 @@ def _build_session(rng: random.Random, num_turns: int) -> SessionState:
     seq = _seq_counter()
 
     for turn_idx in range(num_turns):
-        apply(
-            sess,
-            {
-                "type": "agent.user",
-                "session_id": "prop",
-                "seq": next(seq),
-                "message": {"role": "user", "content": f"q{turn_idx}"},
-            },
-        )
-        # Random number of streaming deltas
+        apply_user_prompt(sess, f"q{turn_idx}")
         for _ in range(rng.randint(1, 5)):
             text = "".join(rng.choices(string.ascii_lowercase, k=rng.randint(1, 8)))
-            apply(
+            _update(
                 sess,
-                {
-                    "type": "agent.delta",
-                    "session_id": "prop",
-                    "seq": next(seq),
-                    "kind": "text",
-                    "text": text,
-                },
+                next(seq),
+                {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": text}},
             )
-        # Maybe a tool round-trip
+        # Maybe a tool round-trip.
         if rng.random() < 0.5:
             tu_id = f"tu_{turn_idx}"
-            apply(
+            _update(
                 sess,
-                {
-                    "type": "agent.tool_use",
-                    "session_id": "prop",
-                    "seq": next(seq),
-                    "tool_use_id": tu_id,
-                    "name": "Read",
-                    "input": {"path": f"/p/{turn_idx}"},
-                },
+                next(seq),
+                {"sessionUpdate": "tool_call", "toolCallId": tu_id, "title": "Read"},
             )
-            apply(
+            _update(
                 sess,
+                next(seq),
                 {
-                    "type": "agent.tool_result",
-                    "session_id": "prop",
-                    "seq": next(seq),
-                    "tool_use_id": tu_id,
-                    "output": "ok",
+                    "sessionUpdate": "tool_call_update",
+                    "toolCallId": tu_id,
+                    "status": "completed",
+                    "content": [{"type": "content", "content": {"type": "text", "text": "ok"}}],
                 },
             )
         apply(
             sess,
             {
-                "type": "agent.result",
+                "type": "session.result",
                 "session_id": "prop",
                 "seq": next(seq),
-                "subtype": "success",
-                "duration_ms": rng.randint(50, 5000),
+                "stop_reason": "end_turn",
                 "usage": {
-                    "input_tokens": rng.randint(0, 100),
-                    "output_tokens": rng.randint(0, 200),
+                    "inputTokens": rng.randint(0, 100),
+                    "outputTokens": rng.randint(0, 200),
                 },
             },
         )
@@ -99,75 +80,49 @@ def _build_session(rng: random.Random, num_turns: int) -> SessionState:
 def test_every_completed_turn_is_locked():
     rng = random.Random(0xBEEF)
     sess = _build_session(rng, num_turns=8)
+    assert len(sess.turns) == 8
     for t in sess.turns:
-        assert t.locked, "every turn driven through agent.result must end locked"
-        assert t.result_subtype == "success"
+        assert t.locked, "every turn driven through session.result must end locked"
+        assert t.result_subtype == "end_turn"
 
 
 def test_last_seq_strictly_monotone():
     sess = SessionState(session_id="m")
     seq = 0
+    chunk = {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "x"}}
     for _ in range(50):
         seq += 1
-        apply(
-            sess,
-            {
-                "type": "agent.delta",
-                "session_id": "m",
-                "seq": seq,
-                "kind": "text",
-                "text": "x",
-            },
-        )
+        apply(sess, {"type": "session.update", "session_id": "m", "seq": seq, "update": chunk})
         assert sess.last_seq == seq
-
     # Out-of-order seqs should not regress.
-    apply(sess, {"type": "agent.delta", "session_id": "m", "seq": 10, "kind": "text", "text": "y"})
+    apply(sess, {"type": "session.update", "session_id": "m", "seq": 10, "update": chunk})
     assert sess.last_seq == 50
 
 
-@pytest.mark.skip(reason="tool_use/tool_result pairing is the ACP tool vocabulary — lands in #2")
-def test_tool_use_pairs_with_result_across_orderings():
-    """Even when several tool_uses interleave, each tool_result lands on
-    its matching block."""
+def test_tool_calls_pair_with_updates_across_orderings():
+    """Even when several tool_calls interleave, each tool_call_update lands on
+    its matching block by tool_call_id."""
     sess = SessionState(session_id="pair")
-    apply(
-        sess,
-        {
-            "type": "agent.user",
-            "session_id": "pair",
-            "seq": 1,
-            "message": {"role": "user", "content": "go"},
-        },
-    )
+    apply_user_prompt(sess, "go")
     ids = ["a", "b", "c"]
     for i, tu in enumerate(ids, start=2):
-        apply(
-            sess,
-            {
-                "type": "agent.tool_use",
-                "session_id": "pair",
-                "seq": i,
-                "tool_use_id": tu,
-                "name": "T",
-                "input": {"i": i},
-            },
-        )
-    # Results arrive in reverse order.
+        _update(sess, i, {"sessionUpdate": "tool_call", "toolCallId": tu, "title": "T"})
+    # Updates arrive in reverse order.
     for i, tu in enumerate(reversed(ids), start=10):
-        apply(
+        _update(
             sess,
+            i,
             {
-                "type": "agent.tool_result",
-                "session_id": "pair",
-                "seq": i,
-                "tool_use_id": tu,
-                "output": f"r-{tu}",
+                "sessionUpdate": "tool_call_update",
+                "toolCallId": tu,
+                "status": "completed",
+                "content": [{"type": "content", "content": {"type": "text", "text": f"r-{tu}"}}],
             },
         )
     by_id = {b.tool_use_id: b for b in sess.turns[-1].blocks if isinstance(b, ToolUseBlock)}
     for tu in ids:
         assert by_id[tu].result_text == f"r-{tu}", f"{tu} got {by_id[tu].result_text}"
+        assert by_id[tu].status == "completed"
 
 
 def test_usage_merge_is_associative():

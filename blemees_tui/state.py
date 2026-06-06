@@ -46,8 +46,13 @@ class ToolUseBlock:
     # ``exec_command_begin`` sends the argv as a list, and other tools may
     # send a string. Renderer formats per-shape.
     input: Any
-    result_text: str | None = None  # populated by agent.tool_result
+    result_text: str | None = None  # populated by a tool_call_update with content
     is_error: bool = False
+    # ACP tool-call fields (#2). ``status`` transitions
+    # pending → in_progress → completed | failed across tool_call_update.
+    status: str = "pending"
+    kind: str = ""  # ACP ToolKind: read | edit | execute | search | …
+    title: str = ""  # human-readable label from the agent
 
 
 ContentBlock = TextBlock | ThinkingBlock | ToolUseBlock
@@ -107,6 +112,14 @@ class SessionState:
     cumulative_usage: Usage = field(default_factory=Usage)
     context_tokens: int = 0
     context_window: int = 0
+
+    # ACP session/update vocabulary (#2). ``plan`` entries are dicts
+    # ``{content, status, priority}`` (status: pending|in_progress|completed);
+    # ``available_commands`` are dicts ``{name, description}`` feeding slash
+    # completion; ``current_mode`` is the agent's current mode id.
+    plan: list[dict[str, Any]] = field(default_factory=list)
+    available_commands: list[dict[str, Any]] = field(default_factory=list)
+    current_mode: str = ""
 
     last_seq: int = 0
     last_seen_seq: int = 0

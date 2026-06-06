@@ -2,77 +2,49 @@
 
 from __future__ import annotations
 
-import pytest
-
-from blemees_tui.reducer import apply
+from blemees_tui.reducer import apply, apply_user_prompt
 from blemees_tui.state import SessionState
 from blemees_tui.transcript import render
 
 
-@pytest.mark.skip(reason="tool-block transcript exercises the ACP tool vocabulary — lands in #2")
 def test_render_includes_user_assistant_tool_blocks_and_usage():
     sess = SessionState(
         session_id="5a01abcd-1234-5678-9abc-def012345678", backend="claude", title="t"
     )
-    apply(
-        sess,
+    apply_user_prompt(sess, "do it")
+    sid = sess.session_id
+
+    def upd(seq, update):
+        apply(sess, {"type": "session.update", "session_id": sid, "seq": seq, "update": update})
+
+    upd(2, {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "okay"}})
+    upd(
+        3,
         {
-            "type": "agent.user",
-            "session_id": sess.session_id,
-            "seq": 1,
-            "message": {"role": "user", "content": "do it"},
+            "sessionUpdate": "tool_call",
+            "toolCallId": "tu1",
+            "title": "Read",
+            "kind": "read",
+            "rawInput": {"path": "/tmp/x"},
+        },
+    )
+    upd(
+        4,
+        {
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": "tu1",
+            "status": "completed",
+            "content": [{"type": "content", "content": {"type": "text", "text": "contents"}}],
         },
     )
     apply(
         sess,
         {
-            "type": "agent.delta",
-            "session_id": sess.session_id,
-            "seq": 2,
-            "kind": "text",
-            "text": "ok",
-        },
-    )
-    apply(
-        sess,
-        {
-            "type": "agent.message",
-            "session_id": sess.session_id,
-            "seq": 3,
-            "role": "assistant",
-            "content": [{"type": "text", "text": "okay"}],
-        },
-    )
-    apply(
-        sess,
-        {
-            "type": "agent.tool_use",
-            "session_id": sess.session_id,
-            "seq": 4,
-            "tool_use_id": "tu1",
-            "name": "Read",
-            "input": {"path": "/tmp/x"},
-        },
-    )
-    apply(
-        sess,
-        {
-            "type": "agent.tool_result",
-            "session_id": sess.session_id,
+            "type": "session.result",
+            "session_id": sid,
             "seq": 5,
-            "tool_use_id": "tu1",
-            "output": "contents",
-        },
-    )
-    apply(
-        sess,
-        {
-            "type": "agent.result",
-            "session_id": sess.session_id,
-            "seq": 6,
-            "subtype": "success",
-            "duration_ms": 1500,
-            "usage": {"input_tokens": 5, "output_tokens": 10},
+            "stop_reason": "end_turn",
+            "usage": {"inputTokens": 5, "outputTokens": 10},
         },
     )
 
@@ -82,7 +54,6 @@ def test_render_includes_user_assistant_tool_blocks_and_usage():
     assert "**assistant**" in md
     assert "**tool_use** · `Read`" in md
     assert "tool_result" in md
-    assert "duration=1.50s" in md
     assert "in=5" in md
     assert "out=10" in md
 

@@ -9,7 +9,7 @@ calls, plan, commands, mode) lands with its tests in #2.
 from __future__ import annotations
 
 from blemees_tui.reducer import apply, apply_user_prompt
-from blemees_tui.state import SessionMode, SessionState, TextBlock, ThinkingBlock
+from blemees_tui.state import SessionMode, SessionState, TextBlock, ThinkingBlock, ToolUseBlock
 
 
 def _new() -> SessionState:
@@ -187,3 +187,126 @@ def test_unknown_frame_type_is_ignored():
     s = _new()
     apply(s, {"type": "totally.unknown", "session_id": "s1", "seq": 1})
     assert s.turns == []
+
+
+# ---- #2: full ACP session/update vocabulary ------------------------
+
+
+def _update(seq: int, update: dict) -> dict:
+    return {"type": "session.update", "session_id": "s1", "seq": seq, "update": update}
+
+
+def test_tool_call_creates_block_with_status():
+    s = _new()
+    apply_user_prompt(s, "do it")
+    apply(
+        s,
+        _update(
+            2,
+            {
+                "sessionUpdate": "tool_call",
+                "toolCallId": "t1",
+                "title": "Read file",
+                "kind": "read",
+                "status": "pending",
+                "rawInput": {"path": "/a"},
+            },
+        ),
+    )
+    block = s.turns[-1].blocks[-1]
+    assert isinstance(block, ToolUseBlock)
+    assert block.tool_use_id == "t1"
+    assert block.status == "pending"
+    assert block.kind == "read"
+    assert block.input == {"path": "/a"}
+
+
+def test_tool_call_update_transitions_status_and_captures_output():
+    s = _new()
+    apply_user_prompt(s, "go")
+    apply(s, _update(2, {"sessionUpdate": "tool_call", "toolCallId": "t1", "title": "Run"}))
+    apply(
+        s,
+        _update(
+            3,
+            {
+                "sessionUpdate": "tool_call_update",
+                "toolCallId": "t1",
+                "status": "completed",
+                "content": [{"type": "content", "content": {"type": "text", "text": "done"}}],
+            },
+        ),
+    )
+    block = s.turns[-1].blocks[-1]
+    assert block.status == "completed"
+    assert block.is_error is False
+    assert block.result_text == "done"
+
+
+def test_tool_call_update_failed_marks_error():
+    s = _new()
+    apply_user_prompt(s, "go")
+    apply(s, _update(2, {"sessionUpdate": "tool_call", "toolCallId": "t1", "title": "Run"}))
+    apply(
+        s, _update(3, {"sessionUpdate": "tool_call_update", "toolCallId": "t1", "status": "failed"})
+    )
+    block = s.turns[-1].blocks[-1]
+    assert block.status == "failed"
+    assert block.is_error is True
+
+
+def test_tool_call_update_before_start_synthesizes_block():
+    s = _new()
+    apply_user_prompt(s, "go")
+    apply(
+        s,
+        _update(
+            2, {"sessionUpdate": "tool_call_update", "toolCallId": "t9", "status": "in_progress"}
+        ),
+    )
+    block = s.turns[-1].blocks[-1]
+    assert isinstance(block, ToolUseBlock) and block.tool_use_id == "t9"
+
+
+def test_plan_populates_session_plan():
+    s = _new()
+    apply(
+        s,
+        _update(
+            1,
+            {
+                "sessionUpdate": "plan",
+                "entries": [
+                    {"content": "step one", "status": "in_progress", "priority": "high"},
+                    {"content": "step two", "status": "pending", "priority": "low"},
+                ],
+            },
+        ),
+    )
+    assert [e["content"] for e in s.plan] == ["step one", "step two"]
+    assert s.plan[0]["status"] == "in_progress"
+
+
+def test_available_commands_update_populates_commands():
+    s = _new()
+    apply(
+        s,
+        _update(
+            1,
+            {
+                "sessionUpdate": "available_commands_update",
+                "availableCommands": [
+                    {"name": "compact", "description": "compress history"},
+                    {"name": "review"},
+                ],
+            },
+        ),
+    )
+    assert [c["name"] for c in s.available_commands] == ["compact", "review"]
+    assert s.available_commands[0]["description"] == "compress history"
+
+
+def test_current_mode_update_sets_mode():
+    s = _new()
+    apply(s, _update(1, {"sessionUpdate": "current_mode_update", "currentModeId": "plan"}))
+    assert s.current_mode == "plan"

@@ -568,14 +568,27 @@ def _format_tool(block: ToolUseBlock) -> RenderableType:
     if todo_summary is not None:
         return todo_summary
 
-    head = f"▸ {_escape(name)}({_escape(_format_tool_input(block.input))})"
-    if block.is_error:
+    failed = block.is_error or block.status == "failed"
+    glyph = _TOOL_STATUS_GLYPHS.get(block.status, "▸")
+    head = f"{glyph} {_escape(name)}({_escape(_format_tool_input(block.input))})"
+    if failed:
         head = f"[red]{head}[/]"
+    elif block.status == "in_progress":
+        head = f"[$warning]{head}[/]"
     if block.result_text:
         preview = block.result_text.strip().splitlines()[0][:120]
-        colour = "red" if block.is_error else "dim"
+        colour = "red" if failed else "dim"
         head += f"\n  [{colour}]→ {_escape(preview)}[/]"
     return head
+
+
+# ACP tool-call status glyphs (#2): pending → in_progress → completed | failed.
+_TOOL_STATUS_GLYPHS = {
+    "pending": "○",
+    "in_progress": "◐",
+    "completed": "●",
+    "failed": "✗",
+}
 
 
 def _format_tool_input(value) -> str:

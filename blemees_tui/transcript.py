@@ -64,8 +64,13 @@ def render(session: SessionState) -> str:
                     lines.append(block.result_text)
                     lines.append("```")
                 lines.append("")
-        if turn.duration_ms is not None:
-            usage_bits = [f"duration={turn.duration_ms / 1000:.2f}s"]
+        # Render a usage/footer line for any completed turn. blemees/3's
+        # session.result carries token usage but no duration, so duration is
+        # shown only when known.
+        if turn.locked:
+            usage_bits: list[str] = []
+            if turn.duration_ms is not None:
+                usage_bits.append(f"duration={turn.duration_ms / 1000:.2f}s")
             usage_bits.append(f"in={turn.usage.input_tokens}")
             usage_bits.append(f"out={turn.usage.output_tokens}")
             if turn.result_subtype:

@@ -254,60 +254,28 @@ def test_format_todowrite_summary_returns_none_for_other_tools():
     assert _format_todowrite_summary("Bash", {"command": "ls"}) is None
 
 
-@pytest.mark.skip(reason="todos derive from ACP tool_call (plan) vocabulary — lands in #2")
-def test_latest_todos_walks_session_in_reverse():
-    """``_latest_todos`` returns the most recent TodoWrite snapshot — newest
-    turn wins, and within a turn the latest block wins."""
+def test_latest_todos_returns_session_plan():
+    """``_latest_todos`` surfaces the session's ACP plan entries (#2)."""
     sess = SessionState(session_id="s")
     apply(
         sess,
         {
-            "type": "agent.user",
+            "type": "session.update",
             "session_id": "s",
             "seq": 1,
-            "message": {"role": "user", "content": "go"},
-        },
-    )
-    # Two TodoWrite calls within turn 1 — the second should win.
-    apply(
-        sess,
-        {
-            "type": "agent.tool_use",
-            "session_id": "s",
-            "seq": 2,
-            "tool_use_id": "tu1",
-            "name": "TodoWrite",
-            "input": {"todos": [{"content": "old", "status": "pending"}]},
-        },
-    )
-    apply(
-        sess,
-        {
-            "type": "agent.tool_use",
-            "session_id": "s",
-            "seq": 3,
-            "tool_use_id": "tu2",
-            "name": "TodoWrite",
-            "input": {"todos": [{"content": "new", "status": "in_progress"}]},
+            "update": {
+                "sessionUpdate": "plan",
+                "entries": [{"content": "step one", "status": "in_progress", "priority": "high"}],
+            },
         },
     )
     todos = _latest_todos(sess)
     assert todos is not None
-    assert todos[0]["content"] == "new"
+    assert todos[0]["content"] == "step one"
 
 
-def test_latest_todos_returns_none_when_no_todowrite_calls():
-    sess = SessionState(session_id="s")
-    apply(
-        sess,
-        {
-            "type": "agent.user",
-            "session_id": "s",
-            "seq": 1,
-            "message": {"role": "user", "content": "hi"},
-        },
-    )
-    assert _latest_todos(sess) is None
+def test_latest_todos_returns_none_when_no_plan():
+    assert _latest_todos(SessionState(session_id="s")) is None
 
 
 class _TodoPanelOnlyApp(App):
@@ -319,7 +287,6 @@ class _TodoPanelOnlyApp(App):
         yield TodoPanel(self._state, id="todos")
 
 
-@pytest.mark.skip(reason="todos derive from ACP tool_call (plan) vocabulary — lands in #2")
 @pytest.mark.asyncio
 async def test_todo_panel_renders_checklist_for_active_session():
     state = AppState()
@@ -327,30 +294,16 @@ async def test_todo_panel_renders_checklist_for_active_session():
     apply(
         sess,
         {
-            "type": "agent.user",
+            "type": "session.update",
             "session_id": "s",
             "seq": 1,
-            "message": {"role": "user", "content": "go"},
-        },
-    )
-    apply(
-        sess,
-        {
-            "type": "agent.tool_use",
-            "session_id": "s",
-            "seq": 2,
-            "tool_use_id": "tu1",
-            "name": "TodoWrite",
-            "input": {
-                "todos": [
+            "update": {
+                "sessionUpdate": "plan",
+                "entries": [
                     {"content": "ship feature", "status": "completed"},
-                    {
-                        "content": "write tests",
-                        "activeForm": "Writing tests",
-                        "status": "in_progress",
-                    },
+                    {"content": "write tests", "status": "in_progress"},
                     {"content": "polish docs", "status": "pending"},
-                ]
+                ],
             },
         },
     )
@@ -363,13 +316,12 @@ async def test_todo_panel_renders_checklist_for_active_session():
         await pilot.pause()
         rendered = str(panel.render())
         assert not panel.has_class("-hidden")
-        # All three glyphs render.
+        # All three status glyphs render.
         assert "☑" in rendered
         assert "◐" in rendered
         assert "☐" in rendered
-        # in_progress uses activeForm; completed/pending use content.
-        assert "Writing tests" in rendered
         assert "ship feature" in rendered
+        assert "write tests" in rendered
         assert "polish docs" in rendered
 
 

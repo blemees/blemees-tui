@@ -399,6 +399,15 @@ class BlemeesTuiApp(App):
             if self.state.active_session_id
             else None
         )
+        # Feed the active session's ACP available_commands to the completion
+        # popup (#2), so `/` lists what the agent actually offers.
+        try:
+            popup = self.query_one("#completion", CompletionPopup)
+            popup.set_agent_commands(active.available_commands if active else [])
+        except Exception:
+            # The popup may not be mounted yet during early refreshes; a
+            # missed command-list update is harmless (the next refresh repaints).
+            pass
         try:
             sidebar = self.query_one("#sidebar", SidebarWidget)
             sidebar.refresh_sessions(active_id=self.state.active_session_id)
