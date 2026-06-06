@@ -139,6 +139,10 @@ class SessionState:
     # stall / auth_required / agent crash; cleared on attach or resolution.
     needs_attention: bool = False
     attention_reason: str | None = None
+    # A relayed tool-permission request awaiting the owner's decision (#4):
+    # ``{request_id, options: [{option_id, name, kind}], tool_call}``. Rendered
+    # as an inline card; cleared once answered or when the turn ends.
+    pending_permission: dict[str, Any] | None = None
 
     pending_errors: list[dict[str, Any]] = field(default_factory=list)
     # Messages typed while the agent was busy. Flushed FIFO when

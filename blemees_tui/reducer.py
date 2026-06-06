@@ -267,6 +267,8 @@ def _map_usage(raw: dict[str, Any]) -> Usage:
 def _on_result(state: SessionState, frame: dict[str, Any]) -> None:
     if not state.turns:
         return
+    # The turn ended — any unanswered permission card is moot.
+    state.pending_permission = None
     turn = state.turns[-1]
     turn.locked = True
     # ACP stop_reason: end_turn | cancelled | max_tokens | refusal | …
@@ -278,6 +280,22 @@ def _on_result(state: SessionState, frame: dict[str, Any]) -> None:
         turn.usage = turn_usage
         state.cumulative_usage = state.cumulative_usage.merge(turn_usage)
     state.turn_active = False
+
+
+def _on_request_permission(state: SessionState, frame: dict[str, Any]) -> None:
+    request_id = frame.get("request_id")
+    if not isinstance(request_id, str) or not request_id:
+        return
+    state.pending_permission = {
+        "request_id": request_id,
+        "options": list(frame.get("options") or []),
+        "tool_call": dict(frame.get("tool_call") or {}),
+    }
+
+
+def clear_pending_permission(state: SessionState) -> None:
+    """Drop the pending permission card (answered, or turn ended)."""
+    state.pending_permission = None
 
 
 def _on_session_error(state: SessionState, frame: dict[str, Any]) -> None:
@@ -394,8 +412,9 @@ _HANDLERS = {
     "replay_gap": _on_replay_gap,
     "session.needs_attention": _on_needs_attention,
     "session.attention_cleared": _on_attention_cleared,
+    "session.request_permission": _on_request_permission,
     "session.info_reply": _on_session_info_reply,
 }
 
 
-__all__ = ["apply", "apply_user_prompt"]
+__all__ = ["apply", "apply_user_prompt", "clear_pending_permission"]

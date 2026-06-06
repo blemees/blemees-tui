@@ -215,6 +215,30 @@ async def test_session_unknown_on_restore_untracks_and_forwards(short_tmpdir):
 
 
 @pytest.mark.asyncio
+async def test_respond_permission_sends_response_frame(fake_daemon):
+    socket_path, received, _ = fake_daemon
+    conn = Connection(socket_path=str(socket_path))
+    await conn.start()
+    try:
+        for _ in range(50):
+            if conn.daemon_info:
+                break
+            await asyncio.sleep(0.02)
+        await conn.respond_permission("s1", "perm_1", outcome="selected", option_id="allow")
+        for _ in range(50):
+            if any(f.get("type") == "session.permission_response" for f in received):
+                break
+            await asyncio.sleep(0.02)
+        frame = next(f for f in received if f.get("type") == "session.permission_response")
+        assert frame["session_id"] == "s1"
+        assert frame["request_id"] == "perm_1"
+        assert frame["outcome"] == "selected"
+        assert frame["option_id"] == "allow"
+    finally:
+        await conn.stop()
+
+
+@pytest.mark.asyncio
 async def test_fatal_protocol_mismatch_stops_supervisor(short_tmpdir):
     socket_path = short_tmpdir / "b.sock"
 
