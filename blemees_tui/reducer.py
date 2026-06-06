@@ -299,9 +299,11 @@ def _on_session_opened(state: SessionState, frame: dict[str, Any]) -> None:
     shows a loading overlay until we catch up.
     """
     if frame.get("profile"):
-        state.backend = str(frame["profile"])  # repurposed label until #2/#3
+        state.backend = str(frame["profile"])  # repurposed label as the profile name
     if frame.get("model"):
         state.model = str(frame["model"])
+    # view_only (#23/#3): resumed against an agent that couldn't reload it.
+    state.view_only = bool(frame.get("view_only", state.view_only))
     last_seq = frame.get("last_seq")
     if not isinstance(last_seq, int) or last_seq <= state.last_seen_seq:
         state.replay_target_seq = 0
@@ -324,6 +326,17 @@ def _on_session_closed_notice(state: SessionState, frame: dict[str, Any]) -> Non
 
 def _on_replay_gap(state: SessionState, _frame: dict[str, Any]) -> None:
     state.replay_gap = True
+
+
+def _on_needs_attention(state: SessionState, frame: dict[str, Any]) -> None:
+    state.needs_attention = True
+    reason = frame.get("reason")
+    state.attention_reason = str(reason) if reason else None
+
+
+def _on_attention_cleared(state: SessionState, _frame: dict[str, Any]) -> None:
+    state.needs_attention = False
+    state.attention_reason = None
 
 
 _KNOWN_WINDOW_TIERS = (200_000, 1_000_000, 2_000_000)
@@ -379,6 +392,8 @@ _HANDLERS = {
     "session.taken": _on_session_taken,
     "session.closed_notice": _on_session_closed_notice,
     "replay_gap": _on_replay_gap,
+    "session.needs_attention": _on_needs_attention,
+    "session.attention_cleared": _on_attention_cleared,
     "session.info_reply": _on_session_info_reply,
 }
 

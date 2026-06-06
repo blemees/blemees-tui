@@ -132,6 +132,13 @@ class SessionState:
     closed_reason: str | None = None
     taken_by_pid: int | None = None
     replay_gap: bool = False
+    # Resumed against an agent that can't reload it (#23): readable, not
+    # drivable. Set from session.opened.view_only.
+    view_only: bool = False
+    # Needs the owner's attention (#24): entered on a detached permission
+    # stall / auth_required / agent crash; cleared on attach or resolution.
+    needs_attention: bool = False
+    attention_reason: str | None = None
 
     pending_errors: list[dict[str, Any]] = field(default_factory=list)
     # Messages typed while the agent was busy. Flushed FIFO when

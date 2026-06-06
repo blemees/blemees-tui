@@ -421,10 +421,10 @@ class BlemeesTuiApp(App):
             pass
         try:
             composer = self.query_one("#composer", ComposerWidget)
-            # Only disable while watching — turn_active does NOT lock the
-            # composer; messages typed mid-turn queue locally and flush
-            # when the current turn lands (Claude Code style).
-            blocked = bool(active and active.mode == SessionMode.WATCHING)
+            # Disable while watching (viewer) or view-only (#3) — turn_active
+            # does NOT lock the composer; messages typed mid-turn queue locally
+            # and flush when the current turn lands (Claude Code style).
+            blocked = bool(active and (active.mode == SessionMode.WATCHING or active.view_only))
             composer.set_enabled(not blocked)
             recall = (
                 [t.user_text for t in active.turns if t.user_text] if active is not None else []
@@ -692,7 +692,8 @@ class BlemeesTuiApp(App):
         async def _fetch() -> list[dict[str, Any]]:
             if self._connection is None:
                 return []
-            return await self._connection.list_sessions(live=True)
+            # Registry-backed: session.list spans profiles and survives restarts.
+            return await self._connection.list_sessions()
 
         self.push_screen(AttachModal(_fetch))
 
@@ -930,17 +931,29 @@ class BlemeesTuiApp(App):
         if self._connection is None:
             return
         sid = msg.session_id
-        sess = SessionState(session_id=sid, mode=SessionMode.WATCHING)
+        owner = getattr(msg, "as_role", "viewer") == "owner"
+        # Reuse a known last_seen_seq (e.g. a session we already have on disk)
+        # so the daemon only replays what we've missed.
+        existing = self.state.sessions.get(sid)
+        last_seen = existing.last_seen_seq if existing else 0
+        sess = existing or SessionState(session_id=sid)
+        sess.mode = SessionMode.OWNED if owner else SessionMode.WATCHING
         self.state.sessions[sid] = sess
         self._set_active_session(sid)
-        self._connection.track_watch(sid)
+        if owner:
+            self._connection.track_owned(sid, last_seen_seq=last_seen)
+        else:
+            self._connection.track_watch(sid, last_seen_seq=last_seen)
         try:
-            await self._connection.attach_session(sid, as_role="viewer", last_seen_seq=0)
+            await self._connection.attach_session(
+                sid, as_role="owner" if owner else "viewer", last_seen_seq=last_seen
+            )
         except Exception as exc:
             self.state.event_log.append(
-                EventLogSource.DAEMON_ERROR, "watch_failed", str(exc), session_id=sid
+                EventLogSource.DAEMON_ERROR, "attach_failed", str(exc), session_id=sid
             )
-            self.state.sessions.pop(sid, None)
+            if existing is None:
+                self.state.sessions.pop(sid, None)
             self._connection.untrack(sid)
         self._persist_sessions()
         self._refresh_ui()
