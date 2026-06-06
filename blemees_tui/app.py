@@ -29,7 +29,11 @@ from .persistence import (
     load_sessions,
     save_sessions,
 )
-from .reducer import apply as reduce_frame, apply_user_prompt as record_user_prompt
+from .reducer import (
+    apply as reduce_frame,
+    apply_user_prompt as record_user_prompt,
+    clear_pending_permission,
+)
 from .snapshot import delete_snapshot, load_snapshot, save_snapshot
 from .state import (
     AppState,
@@ -485,6 +489,17 @@ class BlemeesTuiApp(App):
             new_sess = self.state.sessions.get(sid) if sid else None
             composer.set_text(new_sess.draft if new_sess is not None else "", focus=False)
 
+        # Selecting a session with a pending permission jumps to its card (#4).
+        new_sess = self.state.sessions.get(sid) if sid else None
+        if new_sess is not None and new_sess.pending_permission:
+            try:
+                chat = self.query_one("#chat", ChatPaneWidget)
+                self.call_after_refresh(chat.scroll_to_permission)
+            except Exception:
+                # The chat pane may not be mounted yet (early activation);
+                # the scroll is a convenience, so a miss is harmless.
+                pass
+
     def _refresh_header(self) -> None:
         try:
             header = self.query_one("#chat-header", Static)
@@ -874,6 +889,28 @@ class BlemeesTuiApp(App):
     # ------------------------------------------------------------------
     # Watch / takeover button handlers (§8.4, §8.6, §7.6)
     # ------------------------------------------------------------------
+
+    async def on_chat_pane_widget_permission_response(
+        self, msg: ChatPaneWidget.PermissionResponse
+    ) -> None:
+        if self._connection is None:
+            return
+        try:
+            await self._connection.respond_permission(
+                msg.session_id, msg.request_id, outcome=msg.outcome, option_id=msg.option_id
+            )
+        except Exception as exc:
+            self.state.event_log.append(
+                EventLogSource.DAEMON_ERROR,
+                "permission_failed",
+                str(exc),
+                session_id=msg.session_id,
+            )
+            return
+        sess = self.state.sessions.get(msg.session_id)
+        if sess is not None:
+            clear_pending_permission(sess)
+        self._refresh_ui()
 
     async def on_chat_pane_widget_take_ownership(self, msg: ChatPaneWidget.TakeOwnership) -> None:
         await self._take_ownership(msg.session_id)

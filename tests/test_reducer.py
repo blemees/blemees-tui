@@ -8,7 +8,7 @@ calls, plan, commands, mode) lands with its tests in #2.
 
 from __future__ import annotations
 
-from blemees_tui.reducer import apply, apply_user_prompt
+from blemees_tui.reducer import apply, apply_user_prompt, clear_pending_permission
 from blemees_tui.state import SessionMode, SessionState, TextBlock, ThinkingBlock, ToolUseBlock
 
 
@@ -332,3 +332,45 @@ def test_needs_attention_then_cleared():
     apply(s, {"type": "session.attention_cleared", "session_id": "s1"})
     assert s.needs_attention is False
     assert s.attention_reason is None
+
+
+# ---- #4: inline permission card ------------------------------------
+
+
+def _perm_request(seq: int) -> dict:
+    return {
+        "type": "session.request_permission",
+        "session_id": "s1",
+        "seq": seq,
+        "request_id": "perm_1",
+        "options": [
+            {"option_id": "allow", "name": "Allow", "kind": "allow_once"},
+            {"option_id": "deny", "name": "Deny", "kind": "reject_once"},
+        ],
+        "tool_call": {"title": "Run a command", "kind": "execute"},
+    }
+
+
+def test_request_permission_sets_pending():
+    s = _new()
+    apply_user_prompt(s, "go")
+    apply(s, _perm_request(2))
+    assert s.pending_permission is not None
+    assert s.pending_permission["request_id"] == "perm_1"
+    assert len(s.pending_permission["options"]) == 2
+
+
+def test_result_clears_pending_permission():
+    s = _new()
+    apply_user_prompt(s, "go")
+    apply(s, _perm_request(2))
+    apply(s, {"type": "session.result", "session_id": "s1", "seq": 3, "stop_reason": "end_turn"})
+    assert s.pending_permission is None
+
+
+def test_clear_pending_permission_helper():
+    s = _new()
+    apply_user_prompt(s, "go")
+    apply(s, _perm_request(2))
+    clear_pending_permission(s)
+    assert s.pending_permission is None

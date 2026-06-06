@@ -270,6 +270,26 @@ class Connection:
     async def interrupt(self, session_id: str) -> None:
         await self._send({"type": "session.cancel", "session_id": session_id})
 
+    async def respond_permission(
+        self,
+        session_id: str,
+        request_id: str,
+        *,
+        outcome: str,
+        option_id: str | None = None,
+    ) -> None:
+        # Answer a relayed session.request_permission (#20/#4). `outcome` is
+        # "selected" (option_id set) or "cancelled".
+        frame: dict[str, Any] = {
+            "type": "session.permission_response",
+            "session_id": session_id,
+            "request_id": request_id,
+            "outcome": outcome,
+        }
+        if option_id is not None:
+            frame["option_id"] = option_id
+        await self._send(frame)
+
     async def send_user(self, session_id: str, text: str) -> None:
         # blemees/3 session.prompt carries `prompt` directly (string or ACP
         # content-block array). The daemon does not echo the user turn back.

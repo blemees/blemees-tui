@@ -184,6 +184,16 @@ class ChatPaneWidget(Widget):
     ChatPaneWidget #watch-banner { dock: top; height: auto; width: 100%; padding: 0 2; }
     ChatPaneWidget #watch-buttons { dock: bottom; height: 3; width: 100%; padding: 0 2; }
     ChatPaneWidget #watch-buttons Button { margin-right: 2; }
+    ChatPaneWidget #perm-card {
+        height: auto;
+        width: 100%;
+        padding: 1 2;
+        margin: 1 0;
+        border: round $warning;
+        background: $surface;
+    }
+    ChatPaneWidget #perm-card .perm-buttons { height: 3; width: 100%; }
+    ChatPaneWidget #perm-card .perm-buttons Button { margin-right: 2; }
     ChatPaneWidget #tail-indicator {
         dock: bottom;
         height: 1;
@@ -210,6 +220,18 @@ class ChatPaneWidget(Widget):
             super().__init__()
             self.session_id = session_id
 
+    class PermissionResponse(Message):
+        """The owner answered an inline permission card (#4)."""
+
+        def __init__(
+            self, session_id: str, request_id: str, *, outcome: str, option_id: str | None
+        ) -> None:
+            super().__init__()
+            self.session_id = session_id
+            self.request_id = request_id
+            self.outcome = outcome  # "selected" | "cancelled"
+            self.option_id = option_id
+
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
         self._session_id: str | None = None
@@ -223,6 +245,11 @@ class ChatPaneWidget(Widget):
         self._gap_widget: Static | None = None
         self._replay_widget: Static | None = None
         self._pending_widget: Static | None = None
+        # Inline permission card (#4): the mounted container, the request_id it
+        # answers, and the options list (index → {option_id, kind}).
+        self._perm_widget: Vertical | None = None
+        self._perm_request_id: str | None = None
+        self._perm_options: list[dict] = []
         # Tailing state — when True (default), new turns auto-scroll into
         # view; when False the user has scrolled up and we leave the view
         # alone, surfacing a "paused" indicator at the bottom of the pane.
@@ -321,6 +348,9 @@ class ChatPaneWidget(Widget):
         # Locally-queued user messages that landed mid-turn — surface them
         # below the in-flight turn so the user can see what's pending.
         self._sync_pending_sends(session, scroll)
+
+        # Inline permission card (#4) when the agent is awaiting a decision.
+        self._sync_permission_card(session, scroll)
 
         # Auto-scroll the latest turn into view *only* when tailing.
         # Mounts are async — the widgets have height 0 until the next
@@ -489,6 +519,49 @@ class ChatPaneWidget(Widget):
             self._pending_widget.update(rendered)
 
     # ------------------------------------------------------------------
+    # Inline permission card (#4)
+    # ------------------------------------------------------------------
+
+    def _sync_permission_card(self, session: SessionState, scroll: VerticalScroll) -> None:
+        pending = session.pending_permission
+        request_id = pending.get("request_id") if pending else None
+        # Nothing pending, or it changed → tear down the old card.
+        if request_id != self._perm_request_id and self._perm_widget is not None:
+            self._perm_widget.remove()
+            self._perm_widget = None
+            self._perm_request_id = None
+            self._perm_options = []
+        if not pending or not request_id:
+            return
+        if self._perm_widget is not None:
+            return  # already showing this request
+
+        self._perm_request_id = request_id
+        self._perm_options = [o for o in pending.get("options", []) if isinstance(o, dict)]
+        children: list[Static | Horizontal] = [
+            Static(_permission_text(pending.get("tool_call") or {}), classes="perm-head")
+        ]
+        buttons = [
+            Button(
+                _permission_label(opt),
+                id=f"perm-opt-{idx}",
+                variant="error" if str(opt.get("kind", "")).startswith("reject") else "primary",
+            )
+            for idx, opt in enumerate(self._perm_options)
+        ]
+        buttons.append(Button("Cancel", id="perm-cancel"))
+        children.append(Horizontal(*buttons, classes="perm-buttons"))
+        self._perm_widget = Vertical(*children, id="perm-card")
+        scroll.mount(self._perm_widget)
+        if self._tailing:
+            self.call_after_refresh(scroll.scroll_end, animate=False)
+
+    def scroll_to_permission(self) -> None:
+        """Jump to the pending permission card (sidebar attention select)."""
+        if self._perm_widget is not None:
+            self.query_one("#chat-scroll", VerticalScroll).scroll_to_widget(self._perm_widget)
+
+    # ------------------------------------------------------------------
     # Watch / detached / closed banner
     # ------------------------------------------------------------------
 
@@ -535,6 +608,22 @@ class ChatPaneWidget(Widget):
             self.post_message(self.StopWatching(sid))
         elif bid == "btn-reclaim":
             self.post_message(self.Reclaim(sid))
+        elif bid.startswith("perm-") and self._perm_request_id:
+            event.stop()
+            if bid == "perm-cancel":
+                self.post_message(
+                    self.PermissionResponse(
+                        sid, self._perm_request_id, outcome="cancelled", option_id=None
+                    )
+                )
+            else:
+                idx = int(bid.removeprefix("perm-opt-"))
+                option_id = self._perm_options[idx].get("option_id")
+                self.post_message(
+                    self.PermissionResponse(
+                        sid, self._perm_request_id, outcome="selected", option_id=option_id
+                    )
+                )
 
 
 # ---------------------------------------------------------------------------
@@ -783,6 +872,28 @@ def _banner_text(session: SessionState, mode: str) -> str:
             "couldn't reload this session — a new prompt would start fresh"
         )
     return ""
+
+
+_PERMISSION_KIND_LABELS = {
+    "allow_once": "Allow once",
+    "allow_always": "Always allow",
+    "reject_once": "Deny",
+    "reject_always": "Always deny",
+}
+
+
+def _permission_label(option: dict) -> str:
+    kind = str(option.get("kind", ""))
+    return _PERMISSION_KIND_LABELS.get(kind, str(option.get("name") or kind or "Choose"))
+
+
+def _permission_text(tool_call: dict) -> str:
+    title = tool_call.get("title") or tool_call.get("rawInput") or "a tool"
+    kind = tool_call.get("kind")
+    head = f"[reverse]  Permission needed  [/]  {_escape(str(title))}"
+    if kind:
+        head += f" [dim]({_escape(str(kind))})[/]"
+    return head
 
 
 def _banner_buttons(mode: str) -> list[Button]:

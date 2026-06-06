@@ -52,3 +52,44 @@ async def test_attach_as_owner_takes_over(isolated_state_dir, monkeypatch):
         assert app.state.sessions["sid_o"].mode == SessionMode.OWNED
         assert calls[0]["as_role"] == "owner"
         assert app._connection._tracked["sid_o"]["kind"] == "owned"
+
+
+@pytest.mark.asyncio
+async def test_permission_response_answers_and_clears(isolated_state_dir, monkeypatch):
+    """Answering an inline permission card posts the choice and clears it (#4)."""
+    from blemees_tui.state import SessionState
+    from blemees_tui.widgets import ChatPaneWidget
+
+    await _start_app_no_socket(monkeypatch)
+    sent: list[dict] = []
+
+    async def fake_respond(self, session_id, request_id, *, outcome, option_id=None):
+        sent.append(
+            {
+                "session_id": session_id,
+                "request_id": request_id,
+                "outcome": outcome,
+                "option_id": option_id,
+            }
+        )
+
+    monkeypatch.setattr("blemees_tui.connection.Connection.respond_permission", fake_respond)
+    app = BlemeesTuiApp()
+    async with app.run_test():
+        sess = SessionState(session_id="sid_p")
+        sess.pending_permission = {"request_id": "perm_1", "options": [], "tool_call": {}}
+        app.state.sessions["sid_p"] = sess
+        await app.on_chat_pane_widget_permission_response(
+            ChatPaneWidget.PermissionResponse(
+                "sid_p", "perm_1", outcome="selected", option_id="allow"
+            )
+        )
+        assert sent == [
+            {
+                "session_id": "sid_p",
+                "request_id": "perm_1",
+                "outcome": "selected",
+                "option_id": "allow",
+            }
+        ]
+        assert sess.pending_permission is None

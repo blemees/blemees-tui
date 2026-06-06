@@ -67,9 +67,14 @@ class SidebarWidget(Widget):
                 # Leading mark glyph (◆ when marked for ``>>`` broadcast,
                 # space gap otherwise so all rows align).
                 mark = "[$accent]◆[/]" if sess.marked else " "
-                row = f"{mark} {idx} {icon} {label}"
+                # Attention badge (#4): a pending permission or a needs_attention
+                # flag the owner should act on, shown for background sessions too.
+                badge = ""
+                if sess.pending_permission or sess.needs_attention:
+                    badge = " [$error bold]●[/]"
+                row = f"{mark} {idx} {icon} {label}{badge}"
                 if sid == active_id:
-                    row = f"{mark} [reverse] {idx} [/] {icon} {label}"
+                    row = f"{mark} [reverse] {idx} [/] {icon} {label}{badge}"
                 if busy:
                     # $warning tint signals "agent is working" without the
                     # noise of an extra glyph. Matches TurnStatusBar's
