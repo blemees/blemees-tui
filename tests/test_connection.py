@@ -215,6 +215,70 @@ async def test_session_unknown_on_restore_untracks_and_forwards(short_tmpdir):
 
 
 @pytest.mark.asyncio
+async def test_profile_crud_verbs(short_tmpdir):
+    """list/create/update/delete map to the right frames + ack types (#5)."""
+    socket_path = short_tmpdir / "p.sock"
+    received: list[dict] = []
+
+    async def handle(reader, writer):
+        try:
+            while True:
+                line = await reader.readuntil(b"\n")
+                frame = json.loads(line.decode("utf-8"))
+                received.append(frame)
+                t = frame.get("type")
+                if t == "hello":
+                    _writeln(writer, HELLO_ACK)
+                elif t == "profile.list":
+                    _writeln(
+                        writer,
+                        {
+                            "type": "profiles",
+                            "id": frame.get("id"),
+                            "profiles": [{"name": "default"}],
+                        },
+                    )
+                elif t == "profile.create":
+                    _writeln(
+                        writer,
+                        {"type": "profile.created", "id": frame.get("id"), "name": frame["name"]},
+                    )
+                elif t == "profile.delete":
+                    _writeln(
+                        writer,
+                        {"type": "profile.deleted", "id": frame.get("id"), "name": frame["name"]},
+                    )
+                await writer.drain()
+        except asyncio.IncompleteReadError:
+            pass
+        finally:
+            writer.close()
+            with contextlib.suppress(OSError, ConnectionError):
+                await writer.wait_closed()
+
+    server = await _serve(socket_path, handle)
+    try:
+        conn = Connection(socket_path=str(socket_path))
+        await conn.start()
+        for _ in range(50):
+            if conn.daemon_info:
+                break
+            await asyncio.sleep(0.02)
+        profiles = await conn.list_profiles()
+        assert profiles == [{"name": "default"}]
+        created = await conn.create_profile("mine", {"agent": {"agent_command": "x"}})
+        assert created["name"] == "mine"
+        deleted = await conn.delete_profile("mine")
+        assert deleted["name"] == "mine"
+        sent_types = [f.get("type") for f in received]
+        assert "profile.create" in sent_types and "profile.delete" in sent_types
+        await conn.stop()
+    finally:
+        server.close()
+        await server.wait_closed()
+
+
+@pytest.mark.asyncio
 async def test_respond_permission_sends_response_frame(fake_daemon):
     socket_path, received, _ = fake_daemon
     conn = Connection(socket_path=str(socket_path))

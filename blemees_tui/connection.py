@@ -313,6 +313,31 @@ class Connection:
             ack_types=("session.info_reply",),
         )
 
+    # -- profile CRUD (#25/#5) ------------------------------------------
+
+    async def list_profiles(self) -> list[dict[str, Any]]:
+        reply = await self._request({"type": "profile.list"}, ack_types=("profiles",))
+        profiles = reply.get("profiles") or []
+        return list(profiles) if isinstance(profiles, list) else []
+
+    async def create_profile(self, name: str, spec: dict[str, Any]) -> dict[str, Any]:
+        return await self._request(
+            {"type": "profile.create", "name": name, "profile": spec},
+            ack_types=("profile.created",),
+        )
+
+    async def update_profile(self, name: str, spec: dict[str, Any]) -> dict[str, Any]:
+        return await self._request(
+            {"type": "profile.update", "name": name, "profile": spec},
+            ack_types=("profile.updated",),
+        )
+
+    async def delete_profile(self, name: str) -> dict[str, Any]:
+        return await self._request(
+            {"type": "profile.delete", "name": name},
+            ack_types=("profile.deleted",),
+        )
+
     # ------------------------------------------------------------------
     # Internal: request/response with id correlation
     # ------------------------------------------------------------------

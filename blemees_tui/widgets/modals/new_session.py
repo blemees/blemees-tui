@@ -1,27 +1,70 @@
-"""New session modal (spec §7.1).
+"""New-session + profile-management modal (blemees/3, #5).
 
-Backend pick · model · cwd · title · collapsible **Advanced** section
-that builds the per-backend ``options.<backend>`` map.
-
-The Advanced section is intentionally form-driven for the common knobs and
-falls back to a free-text TOML/JSON box for the long tail (Codex
-``config``; Claude ``agents`` / raw mcp). Inputs left empty are *not*
-sent to the daemon — the backend keeps its default.
+Profile-aware: pick an existing profile and open a session under it, or
+create / edit / delete a profile via the over-wire profile CRUD (#25). The
+editor exposes the agent binary/args, model, cwd, permission policy, MCP
+servers, and notify webhook. Profiles are loaded from ``profile.list`` (the
+daemon registry) via a fetch callback the app supplies.
 """
 
 from __future__ import annotations
 
 import json
-import os
-import shutil
-from pathlib import Path
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from textual.app import ComposeResult
-from textual.containers import Vertical
+from textual.containers import Horizontal, Vertical
 from textual.message import Message
 from textual.screen import ModalScreen
-from textual.widgets import Button, Checkbox, Collapsible, Input, Label, RadioButton, RadioSet
+from textual.widgets import Button, Collapsible, Input, Label, RadioButton, RadioSet
+
+_NEW = "__new__"  # the "create a new profile" radio row
+
+
+def build_profile_spec(
+    *,
+    agent_command: str = "",
+    args: str = "",
+    model: str = "",
+    cwd: str = "",
+    permission_mode: str = "",
+    detached: str = "",
+    mcp_servers: str = "",
+    notify_webhook: str = "",
+) -> dict[str, Any]:
+    """Build a profile spec (the ``profile`` object for profile.create/update)
+    from the editor fields. Blank fields are omitted so the daemon keeps its
+    defaults. ``args`` is whitespace-split; ``mcp_servers`` is a JSON array.
+
+    Raises ``ValueError`` if mcp_servers isn't valid JSON.
+    """
+    agent: dict[str, Any] = {}
+    if agent_command.strip():
+        agent["agent_command"] = agent_command.strip()
+    if args.strip():
+        agent["args"] = args.split()
+    if model.strip():
+        agent["model"] = model.strip()
+    if cwd.strip():
+        agent["cwd"] = cwd.strip()
+    if mcp_servers.strip():
+        parsed = json.loads(mcp_servers)
+        if not isinstance(parsed, list):
+            raise ValueError("mcp_servers must be a JSON array")
+        agent["mcp_servers"] = parsed
+
+    spec: dict[str, Any] = {"agent": agent}
+    policy: dict[str, Any] = {}
+    if permission_mode.strip():
+        policy["mode"] = permission_mode.strip()
+    if detached.strip():
+        policy["detached"] = detached.strip()
+    if policy:
+        spec["permission_policy"] = policy
+    if notify_webhook.strip():
+        spec["notify"] = {"webhook_url": notify_webhook.strip()}
+    return spec
 
 
 class NewSessionModal(ModalScreen):
@@ -30,289 +73,172 @@ class NewSessionModal(ModalScreen):
     DEFAULT_CSS = """
     NewSessionModal { align: center middle; }
     NewSessionModal #new-session-box {
-        width: 80;
+        width: 84;
         max-height: 90%;
         padding: 1 2;
         border: round $accent;
     }
     NewSessionModal Collapsible { margin-top: 1; }
     NewSessionModal Input { margin-bottom: 1; }
+    NewSessionModal #open-buttons { height: 3; }
+    NewSessionModal #open-buttons Button { margin-right: 2; }
     """
 
-    class Submit(Message):
-        def __init__(
-            self,
-            backend: str,
-            model: str,
-            cwd: str,
-            title: str,
-            options: dict[str, Any],
-            peer_mcp_attached: bool = False,
-            peer_poll_interval: str = "15m",
-        ) -> None:
+    class OpenSession(Message):
+        def __init__(self, profile: str, cwd: str, title: str) -> None:
             super().__init__()
-            self.backend = backend
-            self.model = model
+            self.profile = profile
             self.cwd = cwd
             self.title = title
-            self.options = options
-            self.peer_mcp_attached = peer_mcp_attached
-            self.peer_poll_interval = peer_poll_interval
 
-    # Every backend the TUI knows how to drive. The radio always lists both;
-    # rows for backends the daemon didn't advertise are disabled so the user
-    # can see *why* they're stuck on one (rather than wondering if the
-    # picker is broken).
-    SUPPORTED_BACKENDS = ("claude", "codex")
+    class SaveProfile(Message):
+        def __init__(self, name: str, spec: dict[str, Any]) -> None:
+            super().__init__()
+            self.name = name
+            self.spec = spec
 
-    def __init__(self, available_backends: list[str], default_cwd: str = "", **kwargs) -> None:
+    class DeleteProfile(Message):
+        def __init__(self, name: str) -> None:
+            super().__init__()
+            self.name = name
+
+    def __init__(
+        self,
+        fetch_profiles: Callable[[], Awaitable[list[dict[str, Any]]]],
+        default_cwd: str = "",
+        **kwargs,
+    ) -> None:
         super().__init__(**kwargs)
-        self._available = set(available_backends)
+        self._fetch = fetch_profiles
         self._default_cwd = default_cwd
-        # Default to first available; fall back to first supported if none.
-        first_available = next((b for b in self.SUPPORTED_BACKENDS if b in self._available), None)
-        self._default_backend = first_available or self.SUPPORTED_BACKENDS[0]
+        self._profiles: list[dict[str, Any]] = []
 
     def compose(self) -> ComposeResult:
         with Vertical(id="new-session-box"):
-            yield Label("[b]New session[/b]")
-
-            yield Label("Backend:  [green]●[/] detected · [dim]○ not detected[/]")
-            with RadioSet(id="backend"):
-                for name in self.SUPPORTED_BACKENDS:
-                    detected = name in self._available
-                    dot = "[green]●[/]" if detected else "[dim]○[/]"
-                    suffix = "" if detected else " [dim](not detected by daemon)[/]"
-                    btn = RadioButton(
-                        f"{dot} {name}{suffix}",
-                        value=(name == self._default_backend and detected),
-                        id=f"backend-{name}",
-                    )
-                    if not detected:
-                        btn.disabled = True
-                    yield btn
-
-            yield Label("Model:")
-            yield Input(placeholder="sonnet · gpt-5.2-codex · opus · …", id="model")
-
+            yield Label("[b]New session[/b]  [dim]pick a profile, then Open[/]")
+            yield RadioSet(id="profiles")
             yield Label("cwd:")
-            yield Input(value=self._default_cwd, id="cwd")
-
-            yield Label("Alias (optional · [a-z][a-z0-9_-], used for peer claims & sidebar):")
+            yield Input(value=self._default_cwd, id="open-cwd")
+            yield Label("title (optional):")
             yield Input(placeholder="architect", id="title")
+            with Horizontal(id="open-buttons"):
+                yield Button("Open", id="open", variant="primary")
+                yield Button("Delete profile", id="delete", variant="error")
+            with Collapsible(title="Create / edit profile", collapsed=True, id="editor"):
+                yield Label("name:")
+                yield Input(placeholder="claude-sonnet", id="p-name")
+                yield Label("agent command:")
+                yield Input(placeholder="claude-agent-acp", id="p-agent_command")
+                yield Label("args (space-separated):")
+                yield Input(placeholder="acp", id="p-args")
+                yield Label("model:")
+                yield Input(placeholder="sonnet", id="p-model")
+                yield Label("default cwd:")
+                yield Input(id="p-cwd")
+                yield Label("permission mode (relay · allow · deny):")
+                yield Input(placeholder="relay", id="p-permission_mode")
+                yield Label("detached (stall · allow · deny):")
+                yield Input(placeholder="stall", id="p-detached")
+                yield Label("mcp_servers (JSON array):")
+                yield Input(placeholder="[]", id="p-mcp")
+                yield Label("notify webhook URL:")
+                yield Input(id="p-notify_webhook")
+                yield Button("Save profile", id="save", variant="success")
 
-            yield Checkbox(
-                "Attach blemees-peer MCP server (Claude only)",
-                value=False,
-                id="attach-peer-mcp",
+    async def on_mount(self) -> None:
+        await self._reload()
+
+    async def _reload(self) -> None:
+        radio = self.query_one("#profiles", RadioSet)
+        radio.remove_children()
+        try:
+            self._profiles = await self._fetch()
+        except Exception as exc:  # noqa: BLE001 — surface, don't crash
+            self.query_one("#new-session-box", Vertical).mount(
+                Label(f"[red]profile.list failed: {exc}[/]")
             )
-            yield Label("Peer inbox poll interval (e.g. 5m, 15m, 1h):")
-            yield Input(value="15m", placeholder="15m", id="peer-poll-interval")
+            self._profiles = []
+        for idx, row in enumerate(self._profiles):
+            name = str(row.get("name", ""))
+            source = str(row.get("source", ""))
+            label = f"{name}  [dim]{source}[/]" if source else name
+            radio.mount(RadioButton(label, value=(idx == 0), id=f"profile-{name}"))
+        radio.mount(RadioButton("＋ New profile…", id=f"profile-{_NEW}"))
 
-            with Collapsible(title="Advanced — Claude", collapsed=True, id="adv-claude"):
-                yield Label("permission_mode (default · acceptEdits · bypassPermissions · plan):")
-                yield Input(placeholder="default", id="cc-permission_mode")
-                yield Label("tools (comma-separated; blank = default, type 'none' to disable all):")
-                yield Input(id="cc-tools")
-                yield Label("disallowed_tools (comma-separated):")
-                yield Input(id="cc-disallowed_tools")
-                yield Label("system_prompt (overrides default):")
-                yield Input(id="cc-system_prompt")
-                yield Label("effort (e.g. high, medium, low):")
-                yield Input(id="cc-effort")
-                yield Label("agent (subagent name):")
-                yield Input(id="cc-agent")
-                yield Label("betas (comma-separated):")
-                yield Input(id="cc-betas")
-                yield Label("mcp_config paths (comma-separated):")
-                yield Input(id="cc-mcp_config")
+    def _selected_profile(self) -> str:
+        radio = self.query_one("#profiles", RadioSet)
+        btn = radio.pressed_button
+        if btn is None or not btn.id:
+            return ""
+        return btn.id.removeprefix("profile-")
 
-            with Collapsible(title="Advanced — Codex", collapsed=True, id="adv-codex"):
-                yield Label("sandbox (read-only · workspace-write · danger-full-access):")
-                yield Input(placeholder="workspace-write", id="cx-sandbox")
-                yield Label("approval-policy (untrusted · on-failure · on-request · never):")
-                yield Input(id="cx-approval_policy")
-                yield Label("developer-instructions:")
-                yield Input(id="cx-developer_instructions")
-                yield Label("base-instructions:")
-                yield Input(id="cx-base_instructions")
-                yield Label("compact-prompt:")
-                yield Input(id="cx-compact_prompt")
-                yield Label("config (raw JSON merged into options.codex):")
-                yield Input(placeholder='{"key":"value"}', id="cx-config")
-
-            yield Button("Create", id="submit", variant="primary")
+    def on_radio_set_changed(self, event: RadioSet.Changed) -> None:
+        # Pre-fill the editor from the selected profile's known fields; expand
+        # the editor when "New profile" is chosen.
+        name = (event.pressed.id or "").removeprefix("profile-")
+        editor = self.query_one("#editor", Collapsible)
+        if name == _NEW:
+            self.query_one("#p-name", Input).value = ""
+            self.query_one("#p-agent_command", Input).value = ""
+            self.query_one("#p-model", Input).value = ""
+            editor.collapsed = False
+            return
+        row = next((r for r in self._profiles if str(r.get("name")) == name), None)
+        if row is None:
+            return
+        self.query_one("#p-name", Input).value = name
+        agents = row.get("agents") or []
+        first = agents[0] if agents and isinstance(agents[0], dict) else {}
+        self.query_one("#p-agent_command", Input).value = str(first.get("agent", "") or "")
+        self.query_one("#p-model", Input).value = str(first.get("model", "") or "")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id != "submit":
+        bid = event.button.id or ""
+        if bid == "open":
+            self._do_open()
+        elif bid == "delete":
+            self._do_delete()
+        elif bid == "save":
+            self._do_save()
+
+    def _do_open(self) -> None:
+        profile = self._selected_profile()
+        if not profile or profile == _NEW:
             return
-        radio = self.query_one("#backend", RadioSet)
-        backend = ""
-        if radio.pressed_button is not None and radio.pressed_button.id:
-            backend = radio.pressed_button.id.removeprefix("backend-")
-        if not backend or backend not in self._available:
-            # Either nothing selected or the user managed to land on a
-            # disabled row. Refuse to submit — the daemon would reject it
-            # with `unknown_backend` anyway.
-            return
-        model = self.query_one("#model", Input).value
-        cwd = self.query_one("#cwd", Input).value
+        cwd = self.query_one("#open-cwd", Input).value
         title = self.query_one("#title", Input).value
-        options = self._collect_options(backend, model, cwd)
-        # Mirror the gate in `_collect_options`: peer-mcp only attaches when
-        # backend is claude AND the checkbox is on.
-        peer_attached = backend == "claude" and self._is_peer_mcp_attached()
-        peer_interval = self._peer_poll_interval()
         self.app.pop_screen()
-        self.app.post_message(
-            self.Submit(
-                backend,
-                model,
-                cwd,
-                title,
-                options,
-                peer_mcp_attached=peer_attached,
-                peer_poll_interval=peer_interval,
+        self.app.post_message(self.OpenSession(profile, cwd, title))
+
+    def _do_delete(self) -> None:
+        profile = self._selected_profile()
+        if not profile or profile == _NEW:
+            return
+        self.app.pop_screen()
+        self.app.post_message(self.DeleteProfile(profile))
+
+    def _do_save(self) -> None:
+        name = self.query_one("#p-name", Input).value.strip()
+        if not name:
+            return
+        try:
+            spec = build_profile_spec(
+                agent_command=self.query_one("#p-agent_command", Input).value,
+                args=self.query_one("#p-args", Input).value,
+                model=self.query_one("#p-model", Input).value,
+                cwd=self.query_one("#p-cwd", Input).value,
+                permission_mode=self.query_one("#p-permission_mode", Input).value,
+                detached=self.query_one("#p-detached", Input).value,
+                mcp_servers=self.query_one("#p-mcp", Input).value,
+                notify_webhook=self.query_one("#p-notify_webhook", Input).value,
             )
-        )
-
-    def _collect_options(self, backend: str, model: str, cwd: str) -> dict[str, Any]:
-        opts: dict[str, Any] = {}
-        if model:
-            opts["model"] = model
-        if cwd:
-            opts["cwd"] = cwd
-        if backend == "claude":
-            opts.update(self._claude_options())
-            if self._is_peer_mcp_attached():
-                _attach_peer_mcp(opts)
-        elif backend == "codex":
-            opts.update(self._codex_options())
-        return opts
-
-    def _is_peer_mcp_attached(self) -> bool:
-        try:
-            return bool(self.query_one("#attach-peer-mcp", Checkbox).value)
-        except Exception:
-            return False
-
-    def _peer_poll_interval(self) -> str:
-        try:
-            raw = self.query_one("#peer-poll-interval", Input).value.strip()
-        except Exception:
-            return "15m"
-        return raw or "15m"
-
-    def _claude_options(self) -> dict[str, Any]:
-        # Note: only `tools` is documented as having empty-string semantics
-        # ("" disables all tools, schema options.claude.json). Every other
-        # field MUST be omitted when blank — sending "" crashes the backend
-        # (e.g. `claude -p --permission-mode ""` fails arg validation).
-        out: dict[str, Any] = {}
-        for field, key, kind in (
-            ("cc-permission_mode", "permission_mode", "str_nonempty"),
-            ("cc-tools", "tools", "str_tools"),
-            ("cc-disallowed_tools", "disallowed_tools", "list"),
-            ("cc-system_prompt", "system_prompt", "str_nonempty"),
-            ("cc-effort", "effort", "str_nonempty"),
-            ("cc-agent", "agent", "str_nonempty"),
-            ("cc-betas", "betas", "list"),
-            ("cc-mcp_config", "mcp_config", "list"),
-        ):
-            try:
-                value = self.query_one(f"#{field}", Input).value
-            except Exception:
-                continue
-            coerced = _coerce_input(value, kind)
-            if coerced is not _UNSET:
-                out[key] = coerced
-        return out
-
-    def _codex_options(self) -> dict[str, Any]:
-        out: dict[str, Any] = {}
-        for field, key, kind in (
-            ("cx-sandbox", "sandbox", "str_nonempty"),
-            ("cx-approval_policy", "approval-policy", "str_nonempty"),
-            ("cx-developer_instructions", "developer-instructions", "str_nonempty"),
-            ("cx-base_instructions", "base-instructions", "str_nonempty"),
-            ("cx-compact_prompt", "compact-prompt", "str_nonempty"),
-        ):
-            value = self.query_one(f"#{field}", Input).value
-            coerced = _coerce_input(value, kind)
-            if coerced is not _UNSET:
-                out[key] = coerced
-        raw_config = self.query_one("#cx-config", Input).value.strip()
-        if raw_config:
-            try:
-                parsed = json.loads(raw_config)
-                if isinstance(parsed, dict):
-                    out.update(parsed)
-            except json.JSONDecodeError:
-                pass  # silently ignore malformed JSON; spec'd as advanced power-user input
-        return out
+        except ValueError:
+            self.query_one("#new-session-box", Vertical).mount(
+                Label("[red]mcp_servers must be a JSON array[/]")
+            )
+            return
+        self.app.pop_screen()
+        self.app.post_message(self.SaveProfile(name, spec))
 
     def action_dismiss(self) -> None:
         self.app.pop_screen()
-
-
-_UNSET = object()
-
-
-def _peer_mcp_command() -> str:
-    # Resolve the launcher: PATH first, then the sibling peer venv that
-    # the dev workflow uses. Falls back to the bare name so the failure
-    # surfaces at Claude Code's MCP launch (with a clear error) rather
-    # than silently producing an empty config.
-    found = shutil.which("blemees-peer-mcp")
-    if found:
-        return found
-    here = Path(__file__).resolve()
-    sibling = here.parents[4] / "blemees-peer" / ".venv" / "bin" / "blemees-peer-mcp"
-    if sibling.exists():
-        return str(sibling)
-    return "blemees-peer-mcp"
-
-
-def _peer_mcp_config_path() -> Path:
-    base = os.environ.get("XDG_CACHE_HOME") or str(Path.home() / ".cache")
-    return Path(base) / "blemees-tui" / "peer-mcp.json"
-
-
-def _attach_peer_mcp(opts: dict[str, Any]) -> None:
-    """Write a Claude Code MCP config for the peer sidecar and append its
-    path to ``opts['mcp_config']``. Idempotent — safe to run every submit.
-    """
-    config = {
-        "mcpServers": {
-            "blemees-peer": {"command": _peer_mcp_command()},
-        }
-    }
-    path = _peer_mcp_config_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(config, indent=2))
-    existing = opts.get("mcp_config")
-    if isinstance(existing, list):
-        if str(path) not in existing:
-            existing.append(str(path))
-    else:
-        opts["mcp_config"] = [str(path)]
-
-
-def _coerce_input(raw: str, kind: str) -> Any:
-    """Normalise a free-text Input value to the option type, or ``_UNSET`` to skip."""
-    if kind == "str_nonempty":
-        return raw if raw.strip() else _UNSET
-    if kind == "str_tools":
-        # `tools` is the one Claude option where empty-string is meaningful
-        # (it disables every tool). Distinguish "untouched" (skip) from the
-        # explicit `none` sentinel — typing the literal word "none" sends "".
-        stripped = raw.strip()
-        if not stripped:
-            return _UNSET
-        if stripped.lower() == "none":
-            return ""
-        return raw
-    if kind == "list":
-        items = [s.strip() for s in raw.split(",") if s.strip()]
-        return items if items else _UNSET
-    return _UNSET
