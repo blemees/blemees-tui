@@ -15,7 +15,7 @@ from typing import Any
 
 from rich.markup import escape
 from textual.app import ComposeResult
-from textual.containers import Horizontal, Vertical
+from textual.containers import Horizontal, VerticalScroll
 from textual.message import Message
 from textual.screen import ModalScreen
 from textual.widgets import Button, Collapsible, Input, Label, RadioButton, RadioSet
@@ -120,7 +120,7 @@ class NewSessionModal(ModalScreen):
         self._radio_names: list[str] = []
 
     def compose(self) -> ComposeResult:
-        with Vertical(id="new-session-box"):
+        with VerticalScroll(id="new-session-box"):
             yield Label("[b]New session[/b]  [dim]pick a profile, then Open[/]")
             yield RadioSet(id="profiles")
             yield Label("cwd:")
@@ -160,7 +160,7 @@ class NewSessionModal(ModalScreen):
         try:
             self._profiles = await self._fetch()
         except Exception as exc:  # noqa: BLE001 — surface, don't crash
-            self.query_one("#new-session-box", Vertical).mount(
+            self.query_one("#new-session-box", VerticalScroll).mount(
                 Label(f"[red]profile.list failed: {exc}[/]")
             )
             self._profiles = []
@@ -250,7 +250,7 @@ class NewSessionModal(ModalScreen):
                 notify_webhook=self.query_one("#p-notify_webhook", Input).value,
             )
         except ValueError:
-            self.query_one("#new-session-box", Vertical).mount(
+            self.query_one("#new-session-box", VerticalScroll).mount(
                 Label("[red]mcp_servers must be a JSON array[/]")
             )
             return
