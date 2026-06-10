@@ -91,3 +91,59 @@ async def test_delete_profile(isolated_state_dir, monkeypatch):
     async with app.run_test():
         await app.on_new_session_modal_delete_profile(NewSessionModal.DeleteProfile("mine"))
         assert deleted == ["mine"]
+
+
+# ---- picker robustness against hostile profile names (#23) ----------
+
+
+@pytest.mark.asyncio
+async def test_picker_survives_non_identifier_profile_names(isolated_state_dir, monkeypatch):
+    # Names like "my.profile" (legal to the daemon, illegal as Textual widget
+    # ids) and markup-shaped names must not crash the picker (#23).
+    await _start_app_no_socket(monkeypatch)
+
+    async def fetch():
+        return [
+            {"name": "default", "source": "config"},
+            {"name": "my.profile", "source": "dynamic"},
+            {"name": "[red]x[/]", "source": "dynamic"},
+        ]
+
+    app = BlemeesTuiApp()
+    async with app.run_test() as pilot:
+        modal = NewSessionModal(fetch)
+        await app.push_screen(modal)
+        await pilot.pause()
+        # All rows mounted, ids are index-based, names map back losslessly.
+        from textual.widgets import RadioButton, RadioSet
+
+        radio = modal.query_one("#profiles", RadioSet)
+        buttons = list(radio.query(RadioButton))
+        assert [b.id for b in buttons] == ["profile-0", "profile-1", "profile-2", "profile-3"]
+        assert modal._radio_name("profile-1") == "my.profile"
+        assert modal._radio_name("profile-2") == "[red]x[/]"
+        # NOTE: RadioSet.pressed_button stays None after a dynamic mount even
+        # with value=True until the user interacts — pre-existing quirk,
+        # tracked with the selection-UX item on #25. Selection mapping is
+        # asserted in test_picker_selection_maps_through_radio_changes.
+
+
+@pytest.mark.asyncio
+async def test_picker_selection_maps_through_radio_changes(isolated_state_dir, monkeypatch):
+    await _start_app_no_socket(monkeypatch)
+
+    async def fetch():
+        return [{"name": "default", "source": "config"}, {"name": "my.profile", "source": "dynamic"}]
+
+    app = BlemeesTuiApp()
+    async with app.run_test() as pilot:
+        modal = NewSessionModal(fetch)
+        await app.push_screen(modal)
+        await pilot.pause()
+        from textual.widgets import RadioButton
+
+        modal.query_one("#profile-1", RadioButton).value = True
+        await pilot.pause()
+        # Selecting the dotted-name profile pre-fills the editor and resolves
+        # the right name for Open/Delete.
+        assert modal._selected_profile() == "my.profile"

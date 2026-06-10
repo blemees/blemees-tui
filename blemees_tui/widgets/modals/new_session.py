@@ -13,6 +13,7 @@ import json
 from collections.abc import Awaitable, Callable
 from typing import Any
 
+from rich.markup import escape
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.message import Message
@@ -112,6 +113,11 @@ class NewSessionModal(ModalScreen):
         self._fetch = fetch_profiles
         self._default_cwd = default_cwd
         self._profiles: list[dict[str, Any]] = []
+        # Radio-row position → profile name (last row is the _NEW sentinel).
+        # Names never go into widget ids — the daemon's charset is wider than
+        # Textual's identifier rules, so a name like "my.profile" used as an
+        # id crashes the app with BadIdentifier (#23).
+        self._radio_names: list[str] = []
 
     def compose(self) -> ComposeResult:
         with Vertical(id="new-session-box"):
@@ -158,24 +164,35 @@ class NewSessionModal(ModalScreen):
                 Label(f"[red]profile.list failed: {exc}[/]")
             )
             self._profiles = []
+        self._radio_names = []
         for idx, row in enumerate(self._profiles):
             name = str(row.get("name", ""))
             source = str(row.get("source", ""))
-            label = f"{name}  [dim]{source}[/]" if source else name
-            radio.mount(RadioButton(label, value=(idx == 0), id=f"profile-{name}"))
-        radio.mount(RadioButton("＋ New profile…", id=f"profile-{_NEW}"))
+            label = f"{escape(name)}  [dim]{escape(source)}[/]" if source else escape(name)
+            self._radio_names.append(name)
+            radio.mount(RadioButton(label, value=(idx == 0), id=f"profile-{idx}"))
+        radio.mount(RadioButton("＋ New profile…", id=f"profile-{len(self._radio_names)}"))
+        self._radio_names.append(_NEW)
+
+    def _radio_name(self, widget_id: str | None) -> str:
+        """Map a radio row's index-based widget id back to its profile name."""
+        idx_str = (widget_id or "").removeprefix("profile-")
+        try:
+            return self._radio_names[int(idx_str)]
+        except (ValueError, IndexError):
+            return ""
 
     def _selected_profile(self) -> str:
         radio = self.query_one("#profiles", RadioSet)
         btn = radio.pressed_button
         if btn is None or not btn.id:
             return ""
-        return btn.id.removeprefix("profile-")
+        return self._radio_name(btn.id)
 
     def on_radio_set_changed(self, event: RadioSet.Changed) -> None:
         # Pre-fill the editor from the selected profile's known fields; expand
         # the editor when "New profile" is chosen.
-        name = (event.pressed.id or "").removeprefix("profile-")
+        name = self._radio_name(event.pressed.id)
         editor = self.query_one("#editor", Collapsible)
         if name == _NEW:
             self.query_one("#p-name", Input).value = ""
