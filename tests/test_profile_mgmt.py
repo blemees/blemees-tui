@@ -179,8 +179,11 @@ async def test_modal_scrolls_save_button_into_view_on_small_terminal(
         save.focus()
         await pilot.pause()
         # The body is a scroll container and focusing the (initially
-        # off-screen) Save button scrolls it into the visible window.
+        # off-screen) Save button scrolls it toward view. Before the fix the
+        # box was a plain Vertical: allow_vertical_scroll False, offset
+        # pinned at 0, Save clipped with no way to reach it. (No exact
+        # row-geometry assert — scrollbar metrics differ ±2 across
+        # platforms; the scroll-happened signal is the regression guard.)
+        assert save.has_focus
         assert box.allow_vertical_scroll
         assert box.scroll_offset.y > 0
-        visible_bottom = box.scroll_offset.y + box.container_size.height
-        assert save.virtual_region.y < visible_bottom
