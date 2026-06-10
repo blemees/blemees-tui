@@ -82,7 +82,8 @@ class TurnStatusBar(Widget):
     def update_status(self) -> None:
         s = self._state
         active = s.sessions.get(s.active_session_id) if s.active_session_id else None
-        turn_count = f"{len(active.turns)} turns" if active else "0 turns"
+        n_turns = len(active.turns) if active else 0
+        turn_count = f"{n_turns} turn" if n_turns == 1 else f"{n_turns} turns"
         right_bits: list[str] = [turn_count]
         if active is not None and active.context_window:
             pct = round(active.context_tokens / active.context_window * 100)

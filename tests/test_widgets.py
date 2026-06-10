@@ -472,3 +472,41 @@ async def test_composer_recall_cycles_history():
         composer._recall_step(+1)
         assert composer.query_one("#composer-input").text == ""
         assert composer._recall_index is None
+
+
+@pytest.mark.asyncio
+async def test_turn_status_singular_turn():
+    state = AppState()
+    sess = SessionState(session_id="s", model="m")
+    apply_user_prompt(sess, "hi")
+    apply(sess, {"type": "session.result", "session_id": "s", "seq": 2, "stop_reason": "end_turn"})
+    state.sessions["s"] = sess
+    state.active_session_id = "s"
+    app = _TurnStatusOnlyApp(state)
+    async with app.run_test() as pilot:
+        bar = app.query_one("#turn-status", TurnStatusBar)
+        bar.update_status()
+        await pilot.pause()
+        right = str(bar.query_one("#turn-status-right").render())
+        assert "1 turn" in right
+        assert "1 turns" not in right
+
+
+@pytest.mark.asyncio
+async def test_footer_agent_availability_is_not_a_version():
+    # hello_ack's agents map carries availability strings, not versions —
+    # "claude-agent-acp available", never "claude-agent-acp vavailable" (#25).
+    state = AppState()
+    state.daemon.agents = {"claude-agent-acp": "available", "codex-acp": "1.2.3"}
+    state.connection_status = "connected"
+    app = _FooterOnlyApp(state)
+    async with app.run_test() as pilot:
+        footer = app.query_one("#footer", FooterStatusWidget)
+        footer.update_status()
+        await pilot.pause()
+        from textual.widgets import Static
+
+        info = str(footer.query_one("#footer-info", Static).render())
+        assert "claude-agent-acp available" in info
+        assert "vavailable" not in info
+        assert "codex-acp v1.2.3" in info
