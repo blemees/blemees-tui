@@ -100,7 +100,13 @@ class FooterStatusWidget(Widget):
             if active.current_mode:
                 agent_label += f" · {active.current_mode}"
         else:
-            agent_bits = [f"{k} v{v}" for k, v in agents.items()] if agents else []
+            # hello_ack's agents map carries availability strings ("available"),
+            # not versions — only "v"-prefix values that look like versions (#25).
+            agent_bits = (
+                [f"{k} v{v}" if v and v[0].isdigit() else f"{k} {v}" for k, v in agents.items()]
+                if agents
+                else []
+            )
             agent_label = " · ".join(agent_bits) if agent_bits else "no agent"
         rate_chip = ""
         if s.rate_limits and s.rate_limits.text:
