@@ -150,3 +150,40 @@ async def test_picker_selection_maps_through_radio_changes(isolated_state_dir, m
         # Selecting the dotted-name profile pre-fills the editor and resolves
         # the right name for Open/Delete.
         assert modal._selected_profile() == "my.profile"
+
+
+# ---- modal scrolls so the editor and Save stay reachable (#24) -------
+
+
+@pytest.mark.asyncio
+async def test_modal_scrolls_save_button_into_view_on_small_terminal(
+    isolated_state_dir, monkeypatch
+):
+    await _start_app_no_socket(monkeypatch)
+
+    async def fetch():
+        return [{"name": "default", "source": "config"}]
+
+    app = BlemeesTuiApp()
+    async with app.run_test(size=(100, 24)) as pilot:
+        modal = NewSessionModal(fetch)
+        await app.push_screen(modal)
+        await pilot.pause()
+        from textual.containers import VerticalScroll
+        from textual.widgets import Button, Collapsible
+
+        box = modal.query_one("#new-session-box", VerticalScroll)
+        modal.query_one("#editor", Collapsible).collapsed = False
+        await pilot.pause()
+        save = modal.query_one("#save", Button)
+        save.focus()
+        await pilot.pause()
+        # The body is a scroll container and focusing the (initially
+        # off-screen) Save button scrolls it toward view. Before the fix the
+        # box was a plain Vertical: allow_vertical_scroll False, offset
+        # pinned at 0, Save clipped with no way to reach it. (No exact
+        # row-geometry assert — scrollbar metrics differ ±2 across
+        # platforms; the scroll-happened signal is the regression guard.)
+        assert save.has_focus
+        assert box.allow_vertical_scroll
+        assert box.scroll_offset.y > 0
