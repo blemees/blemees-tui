@@ -133,7 +133,10 @@ async def test_picker_selection_maps_through_radio_changes(isolated_state_dir, m
     await _start_app_no_socket(monkeypatch)
 
     async def fetch():
-        return [{"name": "default", "source": "config"}, {"name": "my.profile", "source": "dynamic"}]
+        return [
+            {"name": "default", "source": "config"},
+            {"name": "my.profile", "source": "dynamic"},
+        ]
 
     app = BlemeesTuiApp()
     async with app.run_test() as pilot:
