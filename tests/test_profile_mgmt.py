@@ -215,9 +215,7 @@ async def test_fresh_modal_prefills_editor_from_initial_selection(isolated_state
 
 
 @pytest.mark.asyncio
-async def test_open_with_no_selection_warns_instead_of_silent_noop(
-    isolated_state_dir, monkeypatch
-):
+async def test_open_with_no_selection_warns_instead_of_silent_noop(isolated_state_dir, monkeypatch):
     await _start_app_no_socket(monkeypatch)
 
     async def fetch():
