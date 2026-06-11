@@ -165,14 +165,25 @@ class NewSessionModal(ModalScreen):
             )
             self._profiles = []
         self._radio_names = []
+        first: RadioButton | None = None
         for idx, row in enumerate(self._profiles):
             name = str(row.get("name", ""))
             source = str(row.get("source", ""))
             label = f"{escape(name)}  [dim]{escape(source)}[/]" if source else escape(name)
             self._radio_names.append(name)
-            radio.mount(RadioButton(label, value=(idx == 0), id=f"profile-{idx}"))
+            btn = RadioButton(label, id=f"profile-{idx}")
+            if first is None:
+                first = btn
+            radio.mount(btn)
         radio.mount(RadioButton("＋ New profile…", id=f"profile-{len(self._radio_names)}"))
         self._radio_names.append(_NEW)
+        if first is not None:
+            # Select the first profile *after* mounting — construction-time
+            # value=True never registers on the RadioSet (pressed_button stays
+            # None until interaction), which made a fresh modal's Open a
+            # silent no-op (#29). Post-mount assignment fires Changed, so the
+            # selection is real and the editor prefill matches the visible dot.
+            first.value = True
 
     def _radio_name(self, widget_id: str | None) -> str:
         """Map a radio row's index-based widget id back to its profile name."""
@@ -221,6 +232,8 @@ class NewSessionModal(ModalScreen):
     def _do_open(self) -> None:
         profile = self._selected_profile()
         if not profile or profile == _NEW:
+            # Never a silent no-op (#29) — say why nothing happened.
+            self.app.notify("Pick a profile first — or create one below.", severity="warning")
             return
         cwd = self.query_one("#open-cwd", Input).value
         title = self.query_one("#title", Input).value
@@ -230,6 +243,7 @@ class NewSessionModal(ModalScreen):
     def _do_delete(self) -> None:
         profile = self._selected_profile()
         if not profile or profile == _NEW:
+            self.app.notify("Pick a profile to delete.", severity="warning")
             return
         self.app.pop_screen()
         self.app.post_message(self.DeleteProfile(profile))

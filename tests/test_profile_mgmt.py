@@ -122,10 +122,11 @@ async def test_picker_survives_non_identifier_profile_names(isolated_state_dir, 
         assert [b.id for b in buttons] == ["profile-0", "profile-1", "profile-2", "profile-3"]
         assert modal._radio_name("profile-1") == "my.profile"
         assert modal._radio_name("profile-2") == "[red]x[/]"
-        # NOTE: RadioSet.pressed_button stays None after a dynamic mount even
-        # with value=True until the user interacts — pre-existing quirk,
-        # tracked with the selection-UX item on #25. Selection mapping is
-        # asserted in test_picker_selection_maps_through_radio_changes.
+        # The first profile is *really* selected on a fresh modal (#29):
+        # post-mount assignment registers with the RadioSet, unlike the old
+        # construction-time value=True which left pressed_button None.
+        await pilot.pause()
+        assert modal._selected_profile() == "default"
 
 
 @pytest.mark.asyncio
@@ -187,3 +188,49 @@ async def test_modal_scrolls_save_button_into_view_on_small_terminal(
         assert save.has_focus
         assert box.allow_vertical_scroll
         assert box.scroll_offset.y > 0
+
+
+# ---- deterministic selection + no silent no-ops (#29) ----------------
+
+
+@pytest.mark.asyncio
+async def test_fresh_modal_prefills_editor_from_initial_selection(isolated_state_dir, monkeypatch):
+    await _start_app_no_socket(monkeypatch)
+
+    async def fetch():
+        return [{"name": "default", "source": "config", "agents": [{"agent": "claude-agent-acp"}]}]
+
+    app = BlemeesTuiApp()
+    async with app.run_test() as pilot:
+        modal = NewSessionModal(fetch)
+        await app.push_screen(modal)
+        await pilot.pause()
+        await pilot.pause()
+        from textual.widgets import Input
+
+        # The initial selection fires Changed, so the editor reflects it.
+        assert modal._selected_profile() == "default"
+        assert modal.query_one("#p-name", Input).value == "default"
+        assert modal.query_one("#p-agent_command", Input).value == "claude-agent-acp"
+
+
+@pytest.mark.asyncio
+async def test_open_with_no_selection_warns_instead_of_silent_noop(isolated_state_dir, monkeypatch):
+    await _start_app_no_socket(monkeypatch)
+
+    async def fetch():
+        return []  # only the "new profile" sentinel row — nothing selectable
+
+    app = BlemeesTuiApp()
+    async with app.run_test() as pilot:
+        modal = NewSessionModal(fetch)
+        await app.push_screen(modal)
+        await pilot.pause()
+        assert modal._selected_profile() == ""
+        modal._do_open()
+        await pilot.pause()
+        # Modal stays open and the user is told why nothing happened.
+        assert app.screen is modal
+        modal._do_delete()
+        await pilot.pause()
+        assert app.screen is modal
