@@ -581,9 +581,10 @@ def test_chat_pane_escape_preserves_backslashes_and_neutralizes_markup():
 
 @pytest.mark.asyncio
 async def test_event_log_and_debug_pane_survive_hostile_text(isolated_state_dir, monkeypatch):
-    from blemees_tui.widgets.event_log import _format_entry
     from rich.text import Text
+
     from blemees_tui.state import EventLogEntry, EventLogSource
+    from blemees_tui.widgets.event_log import _format_entry
 
     entry = EventLogEntry(
         ts_ms=0,
