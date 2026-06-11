@@ -764,9 +764,9 @@ class BlemeesTuiApp(App):
         from .widgets.sidebar import attention_tier
 
         candidates = [
-            (attention_tier(sess), order, sid)
+            (tier, order, sid)
             for order, (sid, sess) in enumerate(self.state.sessions.items())
-            if attention_tier(sess) <= 1
+            if (tier := attention_tier(sess)) <= 1
         ]
         if not candidates:
             self.notify("Nothing needs attention.", severity="information")
