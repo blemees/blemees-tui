@@ -20,6 +20,7 @@ _KEY_TABLE = """\
   Ctrl+S            Save transcript
   F1..F12           Switch to session N (1-12)
   Ctrl+Tab          Next session (cycles past 12)
+  a                 Jump to the session needing attention
   t                 Toggle thinking visibility
   m                 Toggle broadcast mark on active session
   Tab               Activate the composer (Esc to deactivate)
