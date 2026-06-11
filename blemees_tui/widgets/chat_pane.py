@@ -16,6 +16,7 @@ import difflib
 from datetime import UTC, datetime
 
 from rich.console import Group, RenderableType
+from rich.markup import escape as rich_escape
 from rich.syntax import Syntax
 from rich.text import Text
 from textual.app import ComposeResult
@@ -849,8 +850,13 @@ def _lexer_for_path(path: str) -> str | None:
 
 
 def _escape(text: str) -> str:
-    """Escape Rich markup characters to avoid the user injecting tags."""
-    return text.replace("[", r"\[").replace("\\\\", "\\")
+    """Escape Rich markup in untrusted text (agent output, tool data).
+
+    Delegates to ``rich.markup.escape`` — the previous hand-rolled version
+    corrupted double-backslashes and could be bypassed for markup
+    injection (#16).
+    """
+    return rich_escape(text)
 
 
 def _banner_text(session: SessionState, mode: str) -> str:

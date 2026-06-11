@@ -10,6 +10,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from pathlib import Path
 
+from rich.markup import escape as rich_escape
 from textual import on
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical, VerticalScroll
@@ -158,4 +159,7 @@ def _format_entry(entry: EventLogEntry) -> str:
         datetime.fromtimestamp(entry.ts_ms / 1000, tz=UTC).astimezone().strftime("%H:%M:%S.%f")[:-3]
     )
     sid = entry.session_id[:8] if entry.session_id else "-"
-    return f"{ts}  [{entry.source.value:>14}]  {sid}  {entry.category}  {entry.message}"
+    # message carries untrusted text (daemon errors, exception reprs) — escape (#16).
+    return (
+        f"{ts}  [{entry.source.value:>14}]  {sid}  {entry.category}  {rich_escape(entry.message)}"
+    )
