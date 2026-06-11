@@ -284,7 +284,7 @@ async def test_multi_agent_profile_shows_picker_and_opens_under_chosen_agent(
 
         agents = modal.query_one("#agents", RadioSet)
         # Visible, index-based ids, hostile name escaped without crashing.
-        assert not agents.has_class("hidden")
+        assert not agents.has_class("-hidden")
         ids = [b.id for b in agents.query(RadioButton)]
         assert ids == ["agent-0", "agent-1", "agent-2"]
         await pilot.pause()  # let the post-mount agent press settle
@@ -324,7 +324,7 @@ async def test_single_agent_profile_hides_picker_and_sends_no_agent(
         await pilot.pause()
         from textual.widgets import RadioSet
 
-        assert modal.query_one("#agents", RadioSet).has_class("hidden")
+        assert modal.query_one("#agents", RadioSet).has_class("-hidden")
         assert modal._selected_agent() is None
         modal._do_open()
         await pilot.pause()
@@ -348,10 +348,10 @@ async def test_switching_to_new_profile_clears_agent_picker(isolated_state_dir, 
         await pilot.pause()
         from textual.widgets import RadioButton, RadioSet
 
-        assert not modal.query_one("#agents", RadioSet).has_class("hidden")
+        assert not modal.query_one("#agents", RadioSet).has_class("-hidden")
         # Select the "＋ New profile…" sentinel (last row) — picker hides.
         last = len(modal._radio_names) - 1
         modal.query_one(f"#profile-{last}", RadioButton).value = True
         await pilot.pause()
-        assert modal.query_one("#agents", RadioSet).has_class("hidden")
+        assert modal.query_one("#agents", RadioSet).has_class("-hidden")
         assert modal._selected_agent() is None

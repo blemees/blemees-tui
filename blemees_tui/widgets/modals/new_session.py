@@ -83,7 +83,7 @@ class NewSessionModal(ModalScreen):
     NewSessionModal Input { margin-bottom: 1; }
     NewSessionModal #open-buttons { height: 3; }
     NewSessionModal #open-buttons Button { margin-right: 2; }
-    NewSessionModal .hidden { display: none; }
+    NewSessionModal .-hidden { display: none; }
     """
 
     class OpenSession(Message):
@@ -131,8 +131,8 @@ class NewSessionModal(ModalScreen):
         with VerticalScroll(id="new-session-box"):
             yield Label("[b]New session[/b]  [dim]pick a profile, then Open[/]")
             yield RadioSet(id="profiles")
-            yield Label("agent:", id="agent-label", classes="hidden")
-            yield RadioSet(id="agents", classes="hidden")
+            yield Label("agent:", id="agent-label", classes="-hidden")
+            yield RadioSet(id="agents", classes="-hidden")
             yield Label("cwd:")
             yield Input(value=self._default_cwd, id="open-cwd")
             yield Label("title (optional):")
@@ -232,8 +232,8 @@ class NewSessionModal(ModalScreen):
         agents = (row or {}).get("agents") or []
         agents = [a for a in agents if isinstance(a, dict) and a.get("name")]
         show = len(agents) >= 2
-        radio.set_class(not show, "hidden")
-        label.set_class(not show, "hidden")
+        radio.set_class(not show, "-hidden")
+        label.set_class(not show, "-hidden")
         if not show:
             return
         first: RadioButton | None = None
