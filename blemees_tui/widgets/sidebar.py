@@ -95,9 +95,9 @@ class SidebarWidget(Widget):
         header = self.query_one("#sidebar-attn-header", Static)
         attn.remove_children()
         rows = [
-            (attention_tier(sess), idx, sid, sess)
+            (tier, idx, sid, sess)
             for idx, (sid, sess) in enumerate(self._state.sessions.items(), start=1)
-            if attention_tier(sess) <= 1
+            if (tier := attention_tier(sess)) <= 1
         ]
         rows.sort(key=lambda r: (r[0], r[1]))
         attn.set_class(not rows, "-hidden")
