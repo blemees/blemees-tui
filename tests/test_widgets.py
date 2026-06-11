@@ -580,7 +580,7 @@ def test_chat_pane_escape_preserves_backslashes_and_neutralizes_markup():
 
 
 @pytest.mark.asyncio
-async def test_event_log_and_debug_pane_survive_hostile_text(isolated_state_dir, monkeypatch):
+async def test_event_log_formatting_survives_hostile_text(isolated_state_dir, monkeypatch):
     from rich.text import Text
 
     from blemees_tui.state import EventLogEntry, EventLogSource
@@ -589,10 +589,25 @@ async def test_event_log_and_debug_pane_survive_hostile_text(isolated_state_dir,
     entry = EventLogEntry(
         ts_ms=0,
         source=EventLogSource.DAEMON_ERROR,
-        category="boom",
+        category="bad[category]",
         message="bad [/] markup [reverse]attack",
         session_id="s1",
     )
-    # Renders as literal text, no MarkupError, no styling injection.
+    # Renders as literal text, no MarkupError, no styling injection — for
+    # the message AND the category/sid fields.
     rendered = Text.from_markup(_format_entry(entry))
     assert "bad [/] markup" in rendered.plain
+    assert "bad[category]" in rendered.plain
+
+
+@pytest.mark.asyncio
+async def test_debug_pane_survives_hostile_frame_reprs():
+    from collections import deque
+
+    from blemees_tui.widgets.debug_pane import DebugPane
+
+    frames = deque([("in", {"type": "session.update", "text": "bad [/] markup [bold]x"})])
+    app = _ChatOnlyApp()
+    async with app.run_test() as pilot:
+        app.push_screen(DebugPane(frames))
+        await pilot.pause()  # MarkupError would crash here

@@ -159,7 +159,8 @@ def _format_entry(entry: EventLogEntry) -> str:
         datetime.fromtimestamp(entry.ts_ms / 1000, tz=UTC).astimezone().strftime("%H:%M:%S.%f")[:-3]
     )
     sid = entry.session_id[:8] if entry.session_id else "-"
-    # message carries untrusted text (daemon errors, exception reprs) — escape (#16).
+    # category / sid / message all carry daemon- or agent-supplied text — escape (#16).
     return (
-        f"{ts}  [{entry.source.value:>14}]  {sid}  {entry.category}  {rich_escape(entry.message)}"
+        f"{ts}  [{entry.source.value:>14}]  {rich_escape(sid)}  "
+        f"{rich_escape(entry.category)}  {rich_escape(entry.message)}"
     )
