@@ -425,6 +425,10 @@ class BlemeesTuiApp(App):
         if status.state == "connected" and not was_connected:
             # Fire one queued message per session now that the daemon is
             # back; the rest flush on each session.result as usual (#15).
+            # Cancel a still-running flush from a previous flap first so two
+            # flushes can't interleave pops.
+            if self._reconnect_flush_task is not None and not self._reconnect_flush_task.done():
+                self._reconnect_flush_task.cancel()
             self._reconnect_flush_task = asyncio.create_task(self._flush_all_pending())
         self._refresh_footer()
         try:
@@ -1231,7 +1235,7 @@ class BlemeesTuiApp(App):
             # Daemon unreachable mid-send — re-queue at the FRONT (keeps
             # flush order) instead of crashing the handler (#15, reproduced).
             sess = self.state.sessions.get(sid)
-            if sess is not None and text not in sess.pending_sends:
+            if sess is not None:
                 sess.pending_sends.insert(0, text)
             self.state.event_log.append(
                 EventLogSource.CONNECTION, "send_queued", str(exc), session_id=sid

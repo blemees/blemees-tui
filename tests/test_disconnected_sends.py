@@ -124,3 +124,19 @@ async def test_queued_messages_flush_on_reconnect(isolated_state_dir, monkeypatc
         await pilot.pause()
         assert sent == [("s1", "queued while offline")]
         assert sess.pending_sends == []
+
+
+@pytest.mark.asyncio
+async def test_duplicate_queued_texts_are_not_dropped_on_requeue(isolated_state_dir, monkeypatch):
+    # pending_sends may legally hold the same text twice; a failed send must
+    # re-insert even when a duplicate is queued (review feedback on #36).
+    await _start_app_no_socket(monkeypatch)
+    _raise_disconnected(monkeypatch, "send_user")
+    app = BlemeesTuiApp()
+    async with app.run_test() as pilot:
+        sess = _seed(app)
+        app.state.connection_status = "connected"
+        sess.pending_sends.append("same")
+        await app._send_user_message("s1", "same")
+        await pilot.pause()
+        assert sess.pending_sends == ["same", "same"]
