@@ -550,3 +550,64 @@ async def test_chat_pane_renders_whitespace_only_tool_result():
         await pilot.pause()
         # Renders without exception; one turn block mounted.
         assert len(list(chat.query(_TurnBlock))) == 1
+
+
+@pytest.mark.asyncio
+async def test_sidebar_renders_markup_hostile_titles():
+    # Titles derive from the user's first prompt — "[/]" in a prompt crashed
+    # the app with MarkupError before titles were escaped (#16, reproduced).
+    state = AppState()
+    sess = SessionState(session_id="s1", cwd="/p")
+    sess.title = "fix the [/] broken [bold]tag"
+    state.sessions["s1"] = sess
+    app = _SidebarOnlyApp(state)
+    async with app.run_test() as pilot:
+        app.query_one("#sidebar", SidebarWidget).refresh_sessions()
+        await pilot.pause()  # crash would surface here
+
+
+def test_chat_pane_escape_preserves_backslashes_and_neutralizes_markup():
+    from blemees_tui.widgets.chat_pane import _escape
+
+    # The old hand-rolled escaper collapsed double-backslashes (verified
+    # corruption) and could be bypassed for markup injection (#16).
+    assert "\\\\" in _escape("C:\\\\path")
+    from rich.text import Text
+
+    rendered = Text.from_markup(_escape("[bold]x[/bold] [red]y[/]"))
+    assert rendered.plain == "[bold]x[/bold] [red]y[/]"
+    assert not rendered.spans  # no styling leaked through
+
+
+@pytest.mark.asyncio
+async def test_event_log_formatting_survives_hostile_text(isolated_state_dir, monkeypatch):
+    from rich.text import Text
+
+    from blemees_tui.state import EventLogEntry, EventLogSource
+    from blemees_tui.widgets.event_log import _format_entry
+
+    entry = EventLogEntry(
+        ts_ms=0,
+        source=EventLogSource.DAEMON_ERROR,
+        category="bad[category]",
+        message="bad [/] markup [reverse]attack",
+        session_id="s1",
+    )
+    # Renders as literal text, no MarkupError, no styling injection — for
+    # the message AND the category/sid fields.
+    rendered = Text.from_markup(_format_entry(entry))
+    assert "bad [/] markup" in rendered.plain
+    assert "bad[category]" in rendered.plain
+
+
+@pytest.mark.asyncio
+async def test_debug_pane_survives_hostile_frame_reprs():
+    from collections import deque
+
+    from blemees_tui.widgets.debug_pane import DebugPane
+
+    frames = deque([("in", {"type": "session.update", "text": "bad [/] markup [bold]x"})])
+    app = _ChatOnlyApp()
+    async with app.run_test() as pilot:
+        app.push_screen(DebugPane(frames))
+        await pilot.pause()  # MarkupError would crash here
