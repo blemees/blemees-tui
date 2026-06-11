@@ -35,6 +35,13 @@ from . import CLIENT_NAME, PROTOCOL_VERSION
 
 logger = logging.getLogger("blemees_tui")
 
+# Max inbound frame size. asyncio's default StreamReader limit is 64 KiB —
+# routine agent output (big tool results, diffs) exceeds that, and an
+# over-limit readuntil() raises LimitOverrunError, which used to kill the
+# reconnect supervisor permanently while the footer still said "connected"
+# (#14). Matches the daemon codec's DEFAULT_MAX_LINE_BYTES.
+MAX_FRAME_BYTES = 16 * 1024 * 1024
+
 
 # ---------------------------------------------------------------------------
 # Socket resolution (mirrors blemees.client.default_socket_path)
@@ -392,6 +399,9 @@ class Connection:
             except (OSError, ConnectionError_, asyncio.IncompleteReadError) as exc:
                 self._set_status("reconnecting", attempt=attempt + 1, error=str(exc))
                 logger.warning("connection error: %s", exc)
+            except Exception as exc:  # noqa: BLE001 — supervisor must never die silently (#14)
+                self._set_status("reconnecting", attempt=attempt + 1, error=str(exc))
+                logger.exception("unexpected connection error — reconnecting")
             finally:
                 await self._teardown_writer()
 
@@ -409,7 +419,7 @@ class Connection:
                 continue
 
     async def _connect_once(self) -> None:
-        reader, writer = await asyncio.open_unix_connection(self.socket_path)
+        reader, writer = await asyncio.open_unix_connection(self.socket_path, limit=MAX_FRAME_BYTES)
         self._reader = reader
         self._writer = writer
         await self._send(
@@ -494,6 +504,13 @@ class Connection:
                 await self._dispatch(frame)
         except (asyncio.IncompleteReadError, ConnectionError, OSError) as exc:
             logger.info("reader loop ended: %s", exc)
+        except (asyncio.LimitOverrunError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+            # An over-limit or undecodable frame poisons the stream framing —
+            # surface it as a connection error so the supervisor's
+            # reconnecting branch flips the status banner immediately instead
+            # of sitting out the backoff still claiming "connected" (#14).
+            logger.warning("reader loop: bad frame (%s) — reconnecting", exc)
+            raise ConnectionError_(f"bad frame: {exc}") from exc
 
     async def _dispatch(self, frame: dict[str, Any]) -> None:
         ftype = frame.get("type", "")
