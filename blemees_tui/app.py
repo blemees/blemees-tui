@@ -145,6 +145,9 @@ class BlemeesTuiApp(App):
         self.state = AppState()
         self._connection: Connection | None = None
         self._debug_frames: deque[tuple[str, dict[str, Any]]] = deque(maxlen=DebugPane.CAPACITY)
+        # Post-hello reconcile of snapshot-restored sessions against the
+        # daemon registry (#30). Reference held so the task isn't GC'd.
+        self._reconcile_task: asyncio.Task | None = None
         self._socket_override = socket_override
         self._show_thinking: bool = self.config_obj.ui.show_thinking
         # Set when a frame-driven UI refresh is already pending — coalesces
@@ -267,6 +270,10 @@ class BlemeesTuiApp(App):
             self.state.event_log.append(
                 EventLogSource.CONNECTION, "hello", f"connected to {self.state.daemon.daemon}"
             )
+            # Snapshot-restored sessions may no longer exist daemon-side
+            # (fresh daemon, wiped state dir). Reconcile against the registry
+            # so stale entries don't sit in the sidebar looking live (#30).
+            self._reconcile_task = asyncio.create_task(self._reconcile_sessions())
         elif ftype == "error" and "session_id" not in frame:
             # Connection-scope error — log; reducer doesn't see it.
             code = str(frame.get("code", ""))
@@ -310,6 +317,39 @@ class BlemeesTuiApp(App):
                     self._persist_sessions()
 
         self._request_refresh()
+
+    async def _reconcile_sessions(self) -> None:
+        """Drop locally-known sessions the daemon's registry doesn't have (#30).
+
+        Runs after every ``hello_ack``. Mirrors the ``session_unknown``
+        cleanup path, but proactively — without it, sessions restored from
+        the on-disk snapshot against a previous daemon sit in the sidebar
+        looking live until the user touches one.
+        """
+        if self._connection is None:
+            return
+        # Only sessions known *before* the request are candidates — anything
+        # opened while the list reply is in flight must survive.
+        before = set(self.state.sessions)
+        try:
+            rows = await self._connection.list_sessions()
+        except Exception as exc:  # noqa: BLE001 — never crash on reconcile
+            self.state.event_log.append(EventLogSource.CONNECTION, "reconcile_failed", str(exc))
+            return
+        known = {str(r.get("session_id", "")) for r in rows}
+        stale = [sid for sid in before if sid not in known and sid in self.state.sessions]
+        for sid in stale:
+            self._connection and self._connection.untrack(sid)
+            self.state.sessions.pop(sid, None)
+            delete_snapshot(sid)
+            if self.state.active_session_id == sid:
+                self._set_active_session(None)
+            self.state.event_log.append(
+                EventLogSource.CONNECTION, "session_reconciled", f"dropped stale session {sid}"
+            )
+        if stale:
+            self._persist_sessions()
+            self._request_refresh()
 
     def _on_notice(self, session_id: str, frame: dict[str, Any]) -> None:
         category = str(frame.get("category", ""))
