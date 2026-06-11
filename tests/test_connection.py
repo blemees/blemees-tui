@@ -364,6 +364,8 @@ async def test_large_frames_survive_and_dispatch(short_tmpdir):
             pass
         finally:
             writer.close()
+            with contextlib.suppress(OSError, ConnectionError):
+                await writer.wait_closed()
 
     server = await _serve(socket_path, handle)
     forwarded: list[dict] = []
@@ -406,6 +408,8 @@ async def test_undecodable_frame_reconnects_instead_of_killing_supervisor(short_
             pass
         finally:
             writer.close()
+            with contextlib.suppress(OSError, ConnectionError):
+                await writer.wait_closed()
 
     server = await _serve(socket_path, handle)
     conn = Connection(socket_path=str(socket_path), on_frame=lambda f: None)

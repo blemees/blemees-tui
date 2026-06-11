@@ -506,9 +506,11 @@ class Connection:
             logger.info("reader loop ended: %s", exc)
         except (asyncio.LimitOverrunError, json.JSONDecodeError, UnicodeDecodeError) as exc:
             # An over-limit or undecodable frame poisons the stream framing —
-            # treat as a connection error and let the supervisor reconnect
-            # rather than dying with the status stuck on "connected" (#14).
+            # surface it as a connection error so the supervisor's
+            # reconnecting branch flips the status banner immediately instead
+            # of sitting out the backoff still claiming "connected" (#14).
             logger.warning("reader loop: bad frame (%s) — reconnecting", exc)
+            raise ConnectionError_(f"bad frame: {exc}") from exc
 
     async def _dispatch(self, frame: dict[str, Any]) -> None:
         ftype = frame.get("type", "")
