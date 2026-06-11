@@ -63,7 +63,7 @@ class SidebarWidget(Widget):
             live.mount(Static(f"[dim]{_escape_markup(_format_cwd(cwd))}[/]", classes="cwd-header"))
             for idx, sid, sess in members:
                 icon = _mode_icon(sess.mode)
-                label = _escape_markup(sess.title) if sess.title else sid[:8]
+                label = _escape_markup(sess.title or sid[:8])
                 busy = sess.turn_active
                 # Leading mark glyph (◆ when marked for ``>>`` broadcast,
                 # space gap otherwise so all rows align).
