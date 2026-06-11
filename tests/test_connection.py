@@ -339,3 +339,87 @@ async def test_fatal_protocol_mismatch_stops_supervisor(short_tmpdir):
         server.close()
         await server.wait_closed()
     assert issubclass(FatalProtocolError, RuntimeError)
+
+
+@pytest.mark.asyncio
+async def test_large_frames_survive_and_dispatch(short_tmpdir):
+    # Frames far beyond asyncio's 64 KiB default limit are routine agent
+    # output (big tool results) — they must dispatch, not kill the reader (#14).
+    socket_path = short_tmpdir / "d.sock"
+    big_text = "x" * (512 * 1024)
+
+    async def handle(reader, writer):
+        try:
+            while True:
+                line = await reader.readuntil(b"\n")
+                frame = json.loads(line.decode("utf-8"))
+                if frame.get("type") == "hello":
+                    _writeln(writer, HELLO_ACK)
+                    _writeln(
+                        writer,
+                        {"type": "session.update", "session_id": "s1", "seq": 1, "big": big_text},
+                    )
+                    await writer.drain()
+        except asyncio.IncompleteReadError:
+            pass
+        finally:
+            writer.close()
+
+    server = await _serve(socket_path, handle)
+    forwarded: list[dict] = []
+    conn = Connection(socket_path=str(socket_path), on_frame=forwarded.append)
+    await conn.start()
+    try:
+        for _ in range(100):
+            if any(f.get("big") for f in forwarded):
+                break
+            await asyncio.sleep(0.02)
+        big = [f for f in forwarded if f.get("type") == "session.update"]
+        assert big and big[0]["big"] == big_text
+        assert conn.status.state == "connected"
+    finally:
+        await conn.stop()
+        server.close()
+        await server.wait_closed()
+
+
+@pytest.mark.asyncio
+async def test_undecodable_frame_reconnects_instead_of_killing_supervisor(short_tmpdir):
+    # A garbage line used to escape the reader's except set and kill the
+    # supervisor with status stuck on "connected" (#14). It must reconnect.
+    socket_path = short_tmpdir / "d.sock"
+    hellos = 0
+
+    async def handle(reader, writer):
+        nonlocal hellos
+        try:
+            while True:
+                line = await reader.readuntil(b"\n")
+                frame = json.loads(line.decode("utf-8"))
+                if frame.get("type") == "hello":
+                    hellos += 1
+                    _writeln(writer, HELLO_ACK)
+                    if hellos == 1:
+                        writer.write(b"this is not json\n")
+                    await writer.drain()
+        except asyncio.IncompleteReadError:
+            pass
+        finally:
+            writer.close()
+
+    server = await _serve(socket_path, handle)
+    conn = Connection(socket_path=str(socket_path), on_frame=lambda f: None)
+    await conn.start()
+    try:
+        # The garbage frame forces a reconnect: a second hello arrives and the
+        # client settles back into "connected" — supervisor alive throughout.
+        for _ in range(200):
+            if hellos >= 2 and conn.status.state == "connected":
+                break
+            await asyncio.sleep(0.02)
+        assert hellos >= 2
+        assert conn.status.state == "connected"
+    finally:
+        await conn.stop()
+        server.close()
+        await server.wait_closed()
