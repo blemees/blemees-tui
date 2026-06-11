@@ -611,3 +611,48 @@ async def test_debug_pane_survives_hostile_frame_reprs():
     async with app.run_test() as pilot:
         app.push_screen(DebugPane(frames))
         await pilot.pause()  # MarkupError would crash here
+
+
+@pytest.mark.asyncio
+async def test_error_bubble_renders_after_session_switch():
+    # Switching sessions detaches the error/replay/permission widgets via
+    # remove_children(), but the references survived — _sync_* then updated
+    # unmounted widgets and the new session's error bubble never rendered (#18).
+    app = _ChatOnlyApp()
+    async with app.run_test() as pilot:
+        chat = app.query_one("#chat", ChatPaneWidget)
+        a = SessionState(session_id="a")
+        b = SessionState(session_id="b")
+        # Session A shows an error bubble (mounts _errors_widget).
+        apply(
+            a,
+            {
+                "type": "session.error",
+                "session_id": "a",
+                "seq": 1,
+                "code": "x",
+                "message": "boom-a",
+            },
+        )
+        chat.show_session(a)
+        await pilot.pause()
+        from textual.widgets import Static
+
+        assert any("boom-a" in str(w.render()) for w in chat.query(Static))
+        # Switch to B, which also has an error — the bubble must render in
+        # the freshly mounted view, not vanish into the orphaned widget.
+        apply(
+            b,
+            {
+                "type": "session.error",
+                "session_id": "b",
+                "seq": 1,
+                "code": "x",
+                "message": "boom-b",
+            },
+        )
+        chat.show_session(b)
+        await pilot.pause()
+        rendered = [str(w.render()) for w in chat.query(Static)]
+        assert any("boom-b" in r for r in rendered), rendered
+        assert not any("boom-a" in r for r in rendered)

@@ -297,6 +297,15 @@ class ChatPaneWidget(Widget):
             self._turn_widgets = []
             self._empty_state = None
             self._pending_widget = None
+            # remove_children() detached these too — drop the references or
+            # the _sync_* helpers keep .update()ing unmounted widgets and the
+            # new session's error bubbles / replay banners / permission card
+            # never render after a switch (#18).
+            self._errors_widget = None
+            self._gap_widget = None
+            self._replay_widget = None
+            self._perm_widget = None
+            self._perm_request_id = None
             self._session_id = session.session_id if session is not None else None
             # New session always starts tailed.
             self._tailing = True
