@@ -667,7 +667,7 @@ def _format_tool(block: ToolUseBlock) -> RenderableType:
     elif block.status == "in_progress":
         head = f"[$warning]{head}[/]"
     if block.result_text:
-        preview = block.result_text.strip().splitlines()[0][:120]
+        preview = (block.result_text.strip().splitlines() or [""])[0][:120]
         colour = "red" if failed else "dim"
         head += f"\n  [{colour}]→ {_escape(preview)}[/]"
     return head
@@ -741,7 +741,7 @@ def _format_edit_diff(name: str, value, block: ToolUseBlock) -> RenderableType |
     )
     parts: list[RenderableType] = [head, syntax]
     if block.result_text:
-        preview = block.result_text.strip().splitlines()[0][:120]
+        preview = (block.result_text.strip().splitlines() or [""])[0][:120]
         style = "red" if block.is_error else "dim"
         parts.append(Text(f"  → {preview}", style=style))
     return Group(*parts)
@@ -773,7 +773,7 @@ def _format_write_content(name: str, value, block: ToolUseBlock) -> RenderableTy
     )
     parts: list[RenderableType] = [head, syntax]
     if block.result_text:
-        preview = block.result_text.strip().splitlines()[0][:120]
+        preview = (block.result_text.strip().splitlines() or [""])[0][:120]
         style = "red" if block.is_error else "dim"
         parts.append(Text(f"  → {preview}", style=style))
     return Group(*parts)

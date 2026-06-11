@@ -510,3 +510,43 @@ async def test_footer_agent_availability_is_not_a_version():
         assert "claude-agent-acp available" in info
         assert "vavailable" not in info
         assert "codex-acp v1.2.3" in info
+
+
+@pytest.mark.asyncio
+async def test_chat_pane_renders_whitespace_only_tool_result():
+    # A command emitting only "\n" produces a whitespace-only result_text;
+    # the preview extraction must not IndexError on the empty line list (#17).
+    app = _ChatOnlyApp()
+    async with app.run_test() as pilot:
+        chat = app.query_one("#chat", ChatPaneWidget)
+        sess = SessionState(session_id="s1")
+        apply_user_prompt(sess, "run it")
+        for frame in (
+            {
+                "type": "session.update",
+                "session_id": "s1",
+                "seq": 2,
+                "update": {
+                    "sessionUpdate": "tool_call",
+                    "toolCallId": "t1",
+                    "title": "Bash",
+                    "status": "in_progress",
+                },
+            },
+            {
+                "type": "session.update",
+                "session_id": "s1",
+                "seq": 3,
+                "update": {
+                    "sessionUpdate": "tool_call_update",
+                    "toolCallId": "t1",
+                    "status": "completed",
+                    "content": [{"type": "content", "content": {"type": "text", "text": "\n"}}],
+                },
+            },
+        ):
+            apply(sess, frame)
+        chat.show_session(sess)
+        await pilot.pause()
+        # Renders without exception; one turn block mounted.
+        assert len(list(chat.query(_TurnBlock))) == 1
