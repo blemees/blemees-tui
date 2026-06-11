@@ -234,3 +234,124 @@ async def test_open_with_no_selection_warns_instead_of_silent_noop(isolated_stat
         modal._do_delete()
         await pilot.pause()
         assert app.screen is modal
+
+
+# ---- agent picker within a multi-agent profile (#37) -----------------
+
+
+def _multi_agent_rows():
+    return [
+        {
+            "name": "dev",
+            "source": "config",
+            "agents": [
+                {"name": "claude", "agent": "claude-agent-acp"},
+                {"name": "cursor", "agent": "cursor-agent"},
+                {"name": "bad[name]", "agent": "junie-acp"},
+            ],
+        },
+        {
+            "name": "solo",
+            "source": "config",
+            "agents": [{"name": "default", "agent": "claude-agent-acp"}],
+        },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_multi_agent_profile_shows_picker_and_opens_under_chosen_agent(
+    isolated_state_dir, monkeypatch
+):
+    await _start_app_no_socket(monkeypatch)
+    opened: list[dict] = []
+
+    async def fake_open(self, sid, **kw):
+        opened.append(kw)
+        return {"type": "session.open_ok"}
+
+    monkeypatch.setattr("blemees_tui.connection.Connection.open_session", fake_open)
+
+    async def fetch():
+        return _multi_agent_rows()
+
+    app = BlemeesTuiApp()
+    async with app.run_test() as pilot:
+        modal = NewSessionModal(fetch)
+        await app.push_screen(modal)
+        await pilot.pause()
+        await pilot.pause()
+        from textual.widgets import RadioButton, RadioSet
+
+        agents = modal.query_one("#agents", RadioSet)
+        # Visible, index-based ids, hostile name escaped without crashing.
+        assert not agents.has_class("-hidden")
+        ids = [b.id for b in agents.query(RadioButton)]
+        assert ids == ["agent-0", "agent-1", "agent-2"]
+        await pilot.pause()  # let the post-mount agent press settle
+        assert modal._selected_agent() == "claude"  # first agent pre-selected
+        # Pick the second agent and open.
+        modal.query_one("#agent-1", RadioButton).value = True
+        await pilot.pause()
+        assert modal._selected_agent() == "cursor"
+        modal._do_open()
+        await pilot.pause()
+        await pilot.pause()
+        assert opened and opened[0]["profile"] == "dev"
+        assert opened[0]["agent"] == "cursor"
+
+
+@pytest.mark.asyncio
+async def test_single_agent_profile_hides_picker_and_sends_no_agent(
+    isolated_state_dir, monkeypatch
+):
+    await _start_app_no_socket(monkeypatch)
+    opened: list[dict] = []
+
+    async def fake_open(self, sid, **kw):
+        opened.append(kw)
+        return {"type": "session.open_ok"}
+
+    monkeypatch.setattr("blemees_tui.connection.Connection.open_session", fake_open)
+
+    async def fetch():
+        return [_multi_agent_rows()[1]]  # just "solo"
+
+    app = BlemeesTuiApp()
+    async with app.run_test() as pilot:
+        modal = NewSessionModal(fetch)
+        await app.push_screen(modal)
+        await pilot.pause()
+        await pilot.pause()
+        from textual.widgets import RadioSet
+
+        assert modal.query_one("#agents", RadioSet).has_class("-hidden")
+        assert modal._selected_agent() is None
+        modal._do_open()
+        await pilot.pause()
+        await pilot.pause()
+        assert opened and opened[0]["profile"] == "solo"
+        assert opened[0]["agent"] is None
+
+
+@pytest.mark.asyncio
+async def test_switching_to_new_profile_clears_agent_picker(isolated_state_dir, monkeypatch):
+    await _start_app_no_socket(monkeypatch)
+
+    async def fetch():
+        return _multi_agent_rows()
+
+    app = BlemeesTuiApp()
+    async with app.run_test() as pilot:
+        modal = NewSessionModal(fetch)
+        await app.push_screen(modal)
+        await pilot.pause()
+        await pilot.pause()
+        from textual.widgets import RadioButton, RadioSet
+
+        assert not modal.query_one("#agents", RadioSet).has_class("-hidden")
+        # Select the "＋ New profile…" sentinel (last row) — picker hides.
+        last = len(modal._radio_names) - 1
+        modal.query_one(f"#profile-{last}", RadioButton).value = True
+        await pilot.pause()
+        assert modal.query_one("#agents", RadioSet).has_class("-hidden")
+        assert modal._selected_agent() is None

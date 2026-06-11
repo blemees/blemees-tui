@@ -938,10 +938,10 @@ class BlemeesTuiApp(App):
         )
         self.state.sessions[sid] = sess
         self._set_active_session(sid)
-        self._connection.track_owned(sid, profile=profile, options=options)
+        self._connection.track_owned(sid, profile=profile, agent=msg.agent, options=options)
         try:
             await self._connection.open_session(
-                sid, profile=profile, options=options, alias=msg.title or None
+                sid, profile=profile, agent=msg.agent, options=options, alias=msg.title or None
             )
         except Exception as exc:
             self.state.event_log.append(

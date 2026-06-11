@@ -83,14 +83,17 @@ class NewSessionModal(ModalScreen):
     NewSessionModal Input { margin-bottom: 1; }
     NewSessionModal #open-buttons { height: 3; }
     NewSessionModal #open-buttons Button { margin-right: 2; }
+    NewSessionModal .-hidden { display: none; }
     """
 
     class OpenSession(Message):
-        def __init__(self, profile: str, cwd: str, title: str) -> None:
+        def __init__(self, profile: str, cwd: str, title: str, agent: str | None = None) -> None:
             super().__init__()
             self.profile = profile
             self.cwd = cwd
             self.title = title
+            # Which agent inside the profile (#37); None = profile default.
+            self.agent = agent
 
     class SaveProfile(Message):
         def __init__(self, name: str, spec: dict[str, Any]) -> None:
@@ -118,11 +121,18 @@ class NewSessionModal(ModalScreen):
         # Textual's identifier rules, so a name like "my.profile" used as an
         # id crashes the app with BadIdentifier (#23).
         self._radio_names: list[str] = []
+        # Same scheme for the per-profile agent picker (#37); the currently
+        # chosen agent name is tracked from the RadioSet.Changed event so it
+        # reflects single-selection semantics without pressed_button lag.
+        self._agent_names: list[str] = []
+        self._chosen_agent: str | None = None
 
     def compose(self) -> ComposeResult:
         with VerticalScroll(id="new-session-box"):
             yield Label("[b]New session[/b]  [dim]pick a profile, then Open[/]")
             yield RadioSet(id="profiles")
+            yield Label("agent:", id="agent-label", classes="-hidden")
+            yield RadioSet(id="agents", classes="-hidden")
             yield Label("cwd:")
             yield Input(value=self._default_cwd, id="open-cwd")
             yield Label("title (optional):")
@@ -200,12 +210,60 @@ class NewSessionModal(ModalScreen):
             return ""
         return self._radio_name(btn.id)
 
+    def _selected_agent(self) -> str | None:
+        """The chosen agent within the selected profile (#37); None when the
+        profile has a single agent (the daemon resolves its default)."""
+        return self._chosen_agent if self._agent_names else None
+
+    def _agent_name(self, widget_id: str | None) -> str:
+        idx_str = (widget_id or "").removeprefix("agent-")
+        try:
+            return self._agent_names[int(idx_str)]
+        except (ValueError, IndexError):
+            return ""
+
+    def _populate_agents(self, row: dict[str, Any] | None) -> None:
+        """Show the agent picker when the profile has 2+ agents (#37)."""
+        radio = self.query_one("#agents", RadioSet)
+        label = self.query_one("#agent-label", Label)
+        radio.remove_children()
+        self._agent_names = []
+        self._chosen_agent = None
+        agents = (row or {}).get("agents") or []
+        agents = [a for a in agents if isinstance(a, dict) and a.get("name")]
+        show = len(agents) >= 2
+        radio.set_class(not show, "-hidden")
+        label.set_class(not show, "-hidden")
+        if not show:
+            return
+        first: RadioButton | None = None
+        for idx, a in enumerate(agents):
+            aname = str(a.get("name", ""))
+            cmd = str(a.get("agent", "") or "")
+            text = f"{escape(aname)}  [dim]{escape(cmd)}[/]" if cmd else escape(aname)
+            self._agent_names.append(aname)
+            btn = RadioButton(text, id=f"agent-{idx}")
+            if first is None:
+                first = btn
+            radio.mount(btn)
+        if first is not None:
+            # Post-mount so the press registers (#29); on_radio_set_changed
+            # records it into _chosen_agent.
+            first.value = True
+            self._chosen_agent = self._agent_names[0]
+
     def on_radio_set_changed(self, event: RadioSet.Changed) -> None:
+        if (event.radio_set.id or "") == "agents":
+            self._chosen_agent = self._agent_name(event.pressed.id)
+            return
+        if (event.radio_set.id or "") != "profiles":
+            return
         # Pre-fill the editor from the selected profile's known fields; expand
         # the editor when "New profile" is chosen.
         name = self._radio_name(event.pressed.id)
         editor = self.query_one("#editor", Collapsible)
         if name == _NEW:
+            self._populate_agents(None)
             self.query_one("#p-name", Input).value = ""
             self.query_one("#p-agent_command", Input).value = ""
             self.query_one("#p-model", Input).value = ""
@@ -214,6 +272,7 @@ class NewSessionModal(ModalScreen):
         row = next((r for r in self._profiles if str(r.get("name")) == name), None)
         if row is None:
             return
+        self._populate_agents(row)
         self.query_one("#p-name", Input).value = name
         agents = row.get("agents") or []
         first = agents[0] if agents and isinstance(agents[0], dict) else {}
@@ -237,8 +296,9 @@ class NewSessionModal(ModalScreen):
             return
         cwd = self.query_one("#open-cwd", Input).value
         title = self.query_one("#title", Input).value
+        agent = self._selected_agent()
         self.app.pop_screen()
-        self.app.post_message(self.OpenSession(profile, cwd, title))
+        self.app.post_message(self.OpenSession(profile, cwd, title, agent=agent))
 
     def _do_delete(self) -> None:
         profile = self._selected_profile()
