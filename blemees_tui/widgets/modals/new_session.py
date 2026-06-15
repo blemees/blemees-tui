@@ -13,8 +13,9 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from typing import Any
 
+from rich.markup import escape
 from textual.app import ComposeResult
-from textual.containers import Horizontal, Vertical
+from textual.containers import Horizontal, VerticalScroll
 from textual.message import Message
 from textual.screen import ModalScreen
 from textual.widgets import Button, Input, Label, RadioButton, RadioSet
@@ -61,7 +62,7 @@ class NewSessionModal(ModalScreen):
         self._profiles: list[dict[str, Any]] = []
 
     def compose(self) -> ComposeResult:
-        with Vertical(id="new-session-box"):
+        with VerticalScroll(id="new-session-box"):
             yield Label("[b]New session[/b]  [dim]pick an agent, then Open[/]")
             yield Label("", id="profile-name")
             yield Label("agent:")
@@ -82,8 +83,8 @@ class NewSessionModal(ModalScreen):
         try:
             self._profiles = await self._fetch()
         except Exception as exc:  # noqa: BLE001 — surface, don't crash
-            self.query_one("#new-session-box", Vertical).mount(
-                Label(f"[red]profile.list failed: {exc}[/]")
+            self.query_one("#new-session-box", VerticalScroll).mount(
+                Label(f"[red]profile.list failed: {escape(str(exc))}[/]")
             )
             self._profiles = []
         # Resolve the active profile: the one fixed at launch, else the first
@@ -94,7 +95,7 @@ class NewSessionModal(ModalScreen):
         if row is not None:
             self._profile = str(row.get("name", ""))
         self.query_one("#profile-name", Label).update(
-            f"[dim]profile:[/] [b]{self._profile or '(none)'}[/]"
+            f"[dim]profile:[/] [b]{escape(self._profile) or '(none)'}[/]"
         )
         agents = (row.get("agents") if row else None) or []
         for ag in agents:
@@ -104,7 +105,9 @@ class NewSessionModal(ModalScreen):
             if not name:
                 continue
             model = ag.get("model")
-            label = f"{name}  [dim]{model}[/]" if model else name
+            # Escape daemon-supplied strings — names/models can contain markup
+            # metacharacters that would otherwise corrupt the label (#34).
+            label = f"{escape(name)}  [dim]{escape(str(model))}[/]" if model else escape(name)
             radio.mount(RadioButton(label, id=f"agent-{name}"))
         # Default-select the first agent. Setting ``value`` after the button is
         # mounted is what registers it as the RadioSet's pressed button (the

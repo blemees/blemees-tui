@@ -6,6 +6,7 @@ import os
 from collections import OrderedDict
 from pathlib import Path
 
+from rich.markup import escape as rich_escape
 from textual.app import ComposeResult
 from textual.containers import Vertical
 from textual.widget import Widget
@@ -106,7 +107,7 @@ class SidebarWidget(Widget):
 
 def _session_row(idx: int, sid: str, sess, active_id: str | None) -> str:
     icon = _mode_icon(sess.mode)
-    label = sess.title or sid[:8]
+    label = _escape_markup(sess.title or sid[:8])
     cwd_txt = f" [dim]{_escape_markup(_format_cwd(sess.cwd))}[/]" if sess.cwd else ""
     # Leading mark glyph (◆ when marked for ``>>`` broadcast, space gap
     # otherwise so all rows align).
@@ -158,5 +159,6 @@ def _format_cwd(cwd: str) -> str:
 
 
 def _escape_markup(text: str) -> str:
-    """Escape Rich markup so user-controlled paths can't inject tags."""
-    return text.replace("[", r"\[")
+    """Escape Rich markup in user-controlled text (paths, titles) — rich's
+    own escaper, not a naive ``[``-replace (#16)."""
+    return rich_escape(text)

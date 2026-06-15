@@ -150,6 +150,11 @@ class BlemeesTuiApp(App):
         self.state = AppState()
         self._connection: Connection | None = None
         self._debug_frames: deque[tuple[str, dict[str, Any]]] = deque(maxlen=DebugPane.CAPACITY)
+        # Post-hello reconcile of snapshot-restored sessions against the
+        # daemon registry (#30). Reference held per the asyncio docs: tasks
+        # without a saved reference can be garbage-collected mid-execution.
+        self._reconcile_task: asyncio.Task | None = None
+        self._reconnect_flush_task: asyncio.Task | None = None
         self._socket_override = socket_override
         self._show_thinking: bool = self.config_obj.ui.show_thinking
         # Set when a frame-driven UI refresh is already pending — coalesces
@@ -275,6 +280,11 @@ class BlemeesTuiApp(App):
             # Pull the active profile's agent roster so the sidebar can show
             # every agent up front, even those with no sessions yet.
             self._schedule_refresh_roster()
+            # Snapshot-restored sessions may no longer exist daemon-side
+            # (fresh daemon, wiped state dir). Reconcile against the registry
+            # so stale entries don't sit in the sidebar looking live (#30).
+            self._reconcile_task = asyncio.create_task(self._reconcile_sessions())
+            self._reconcile_task.add_done_callback(self._log_reconcile_crash)
         elif ftype == "error" and "session_id" not in frame:
             # Connection-scope error — log; reducer doesn't see it.
             code = str(frame.get("code", ""))
@@ -318,6 +328,52 @@ class BlemeesTuiApp(App):
                     self._persist_sessions()
 
         self._request_refresh()
+
+    async def _reconcile_sessions(self) -> None:
+        """Drop locally-known sessions the daemon's registry doesn't have (#30).
+
+        Runs after every ``hello_ack``. Mirrors the ``session_unknown``
+        cleanup path, but proactively — without it, sessions restored from
+        the on-disk snapshot against a previous daemon sit in the sidebar
+        looking live until the user touches one.
+        """
+        if self._connection is None:
+            return
+        # Only sessions known *before* the request are candidates — anything
+        # opened while the list reply is in flight must survive.
+        before = set(self.state.sessions)
+        try:
+            rows = await self._connection.list_sessions()
+        except Exception as exc:  # noqa: BLE001 — never crash on reconcile
+            self.state.event_log.append(EventLogSource.CONNECTION, "reconcile_failed", str(exc))
+            return
+        # Guard row shapes — a malformed daemon reply must not crash the
+        # reconcile task (review feedback on #32).
+        known = {
+            str(r.get("session_id")) for r in rows if isinstance(r, dict) and r.get("session_id")
+        }
+        stale = [sid for sid in before if sid not in known and sid in self.state.sessions]
+        for sid in stale:
+            self._connection and self._connection.untrack(sid)
+            self.state.sessions.pop(sid, None)
+            delete_snapshot(sid)
+            if self.state.active_session_id == sid:
+                self._set_active_session(None)
+            self.state.event_log.append(
+                EventLogSource.CONNECTION, "session_reconciled", f"dropped stale session {sid}"
+            )
+        if stale:
+            self._persist_sessions()
+            self._request_refresh()
+
+    def _log_reconcile_crash(self, task: asyncio.Task) -> None:
+        # Surface unexpected reconcile crashes instead of relying on the
+        # interpreter's never-retrieved warning (review feedback on #32).
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            self.state.event_log.append(EventLogSource.DAEMON_ERROR, "reconcile_crashed", repr(exc))
 
     def _on_notice(self, session_id: str, frame: dict[str, Any]) -> None:
         category = str(frame.get("category", ""))
@@ -397,9 +453,21 @@ class BlemeesTuiApp(App):
         except Exception:
             pass
 
+    def _daemon_reachable(self) -> bool:
+        return self._connection is not None and self.state.connection_status == "connected"
+
     def _on_connection_status(self, status: ConnectionStatus) -> None:
+        was_connected = self.state.connection_status == "connected"
         self.state.connection_status = status.state
         self.state.reconnect_attempt = status.attempt
+        if status.state == "connected" and not was_connected:
+            # Fire one queued message per session now that the daemon is
+            # back; the rest flush on each session.result as usual (#15).
+            # Cancel a still-running flush from a previous flap first so two
+            # flushes can't interleave pops.
+            if self._reconnect_flush_task is not None and not self._reconnect_flush_task.done():
+                self._reconnect_flush_task.cancel()
+            self._reconnect_flush_task = asyncio.create_task(self._flush_all_pending())
         self._refresh_footer()
         try:
             banner = self.query_one("#conn-banner", ConnectionBanner)
@@ -790,8 +858,15 @@ class BlemeesTuiApp(App):
             await self._interrupt_session(sid)
 
     async def _interrupt_session(self, sid: str) -> None:
-        if self._connection is not None:
+        if self._connection is None:
+            return
+        try:
             await self._connection.interrupt(sid)
+        except ConnectionError_ as exc:
+            self.state.event_log.append(
+                EventLogSource.CONNECTION, "interrupt_failed", str(exc), session_id=sid
+            )
+            self.notify("Daemon unreachable — can't interrupt.", severity="warning")
 
     async def _close_active(self, *, delete: bool) -> None:
         sid = self.state.active_session_id
@@ -808,6 +883,12 @@ class BlemeesTuiApp(App):
             return
         try:
             await self._connection.close_session(sid, delete=delete)
+        except ConnectionError_ as exc:
+            # Daemon unreachable — proceed with local cleanup; the daemon-side
+            # session lingers and stays reachable via attach later (#15).
+            self.state.event_log.append(
+                EventLogSource.CONNECTION, "close_offline", str(exc), session_id=sid
+            )
         finally:
             self._connection.untrack(sid)
             self.state.sessions.pop(sid, None)
@@ -1125,6 +1206,13 @@ class BlemeesTuiApp(App):
         if not sid or self._connection is None:
             return
         sess = self.state.sessions.get(sid)
+        if sess is not None and not self._daemon_reachable():
+            # Typing while disconnected used to crash the whole app via an
+            # unguarded ConnectionError_ in this handler (#15, reproduced).
+            sess.pending_sends.append(msg.text)
+            self.notify("Daemon unreachable — message queued.", severity="warning")
+            self._refresh_ui()
+            return
         if sess is not None and sess.turn_active:
             # Agent is mid-turn — queue locally; we'll fire it when
             # agent.result lands. The daemon would reject mid-turn sends
@@ -1170,6 +1258,15 @@ class BlemeesTuiApp(App):
         )
         sent = 0
         queued = 0
+        if not self._daemon_reachable():
+            for sess in recipients:
+                sess.pending_sends.append(body)
+            self.notify("Daemon unreachable — broadcast queued.", severity="warning")
+            self.state.event_log.append(
+                EventLogSource.TUI_INTERNAL, "broadcast", f"queued for {len(recipients)} (offline)"
+            )
+            self._refresh_ui()
+            return
         for sess in recipients:
             if sess.turn_active:
                 sess.pending_sends.append(body)
@@ -1190,12 +1287,30 @@ class BlemeesTuiApp(App):
     async def _send_user_message(self, sid: str, text: str) -> None:
         if self._connection is None:
             return
-        await self._connection.send_user(sid, text)
+        try:
+            await self._connection.send_user(sid, text)
+        except ConnectionError_ as exc:
+            # Daemon unreachable mid-send — re-queue at the FRONT (keeps
+            # flush order) instead of crashing the handler (#15, reproduced).
+            sess = self.state.sessions.get(sid)
+            if sess is not None:
+                sess.pending_sends.insert(0, text)
+            self.state.event_log.append(
+                EventLogSource.CONNECTION, "send_queued", str(exc), session_id=sid
+            )
+            self.notify("Daemon unreachable — message queued.", severity="warning")
+            self._refresh_ui()
+            return
         # blemees/3 agents don't echo the user turn back, so record it locally.
         sess = self.state.sessions.get(sid)
         if sess is not None:
             record_user_prompt(sess, text)
             self._refresh_ui()
+
+    async def _flush_all_pending(self) -> None:
+        for sid, sess in list(self.state.sessions.items()):
+            if sess.pending_sends and not sess.turn_active:
+                await self._flush_pending_sends(sid)
 
     async def _flush_pending_sends(self, sid: str) -> None:
         sess = self.state.sessions.get(sid)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import deque
 
+from rich.markup import escape as rich_escape
 from textual.app import ComposeResult
 from textual.containers import VerticalScroll
 from textual.screen import ModalScreen
@@ -26,7 +27,7 @@ class DebugPane(ModalScreen):
     def compose(self) -> ComposeResult:
         with VerticalScroll(id="debug-frames"):
             for direction, frame in self._frames:
-                yield Static(f"[dim]{direction}[/]  {frame!r}")
+                yield Static(f"[dim]{direction}[/]  {rich_escape(repr(frame))}")
 
     def action_dismiss(self) -> None:
         self.app.pop_screen()

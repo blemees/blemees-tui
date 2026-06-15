@@ -588,3 +588,142 @@ async def test_sidebar_shows_all_sessions_before_profile_known():
         assert "a" in rendered and "b" in rendered
         # No profile → the profile line is hidden.
         assert app.query_one("#sidebar-profile").display is False
+
+
+@pytest.mark.asyncio
+async def test_turn_status_singular_turn():
+    state = AppState()
+    sess = SessionState(session_id="s", model="m")
+    apply_user_prompt(sess, "hi")
+    apply(sess, {"type": "session.result", "session_id": "s", "seq": 2, "stop_reason": "end_turn"})
+    state.sessions["s"] = sess
+    state.active_session_id = "s"
+    app = _TurnStatusOnlyApp(state)
+    async with app.run_test() as pilot:
+        bar = app.query_one("#turn-status", TurnStatusBar)
+        bar.update_status()
+        await pilot.pause()
+        right = str(bar.query_one("#turn-status-right").render())
+        assert "1 turn" in right
+        assert "1 turns" not in right
+
+
+@pytest.mark.asyncio
+async def test_footer_agent_availability_is_not_a_version():
+    # hello_ack's agents map carries availability strings, not versions —
+    # "claude-agent-acp available", never "claude-agent-acp vavailable" (#25).
+    state = AppState()
+    state.daemon.agents = {"claude-agent-acp": "available", "codex-acp": "1.2.3"}
+    state.connection_status = "connected"
+    app = _FooterOnlyApp(state)
+    async with app.run_test() as pilot:
+        footer = app.query_one("#footer", FooterStatusWidget)
+        footer.update_status()
+        await pilot.pause()
+        from textual.widgets import Static
+
+        info = str(footer.query_one("#footer-info", Static).render())
+        assert "claude-agent-acp available" in info
+        assert "vavailable" not in info
+        assert "codex-acp v1.2.3" in info
+
+
+@pytest.mark.asyncio
+async def test_chat_pane_renders_whitespace_only_tool_result():
+    # A command emitting only "\n" produces a whitespace-only result_text;
+    # the preview extraction must not IndexError on the empty line list (#17).
+    app = _ChatOnlyApp()
+    async with app.run_test() as pilot:
+        chat = app.query_one("#chat", ChatPaneWidget)
+        sess = SessionState(session_id="s1")
+        apply_user_prompt(sess, "run it")
+        for frame in (
+            {
+                "type": "session.update",
+                "session_id": "s1",
+                "seq": 2,
+                "update": {
+                    "sessionUpdate": "tool_call",
+                    "toolCallId": "t1",
+                    "title": "Bash",
+                    "status": "in_progress",
+                },
+            },
+            {
+                "type": "session.update",
+                "session_id": "s1",
+                "seq": 3,
+                "update": {
+                    "sessionUpdate": "tool_call_update",
+                    "toolCallId": "t1",
+                    "status": "completed",
+                    "content": [{"type": "content", "content": {"type": "text", "text": "\n"}}],
+                },
+            },
+        ):
+            apply(sess, frame)
+        chat.show_session(sess)
+        await pilot.pause()
+        # Renders without exception; one turn block mounted.
+        assert len(list(chat.query(_TurnBlock))) == 1
+
+
+@pytest.mark.asyncio
+async def test_sidebar_renders_markup_hostile_titles():
+    # Titles derive from the user's first prompt — "[/]" in a prompt crashed
+    # the app with MarkupError before titles were escaped (#16, reproduced).
+    state = AppState()
+    sess = SessionState(session_id="s1", cwd="/p")
+    sess.title = "fix the [/] broken [bold]tag"
+    state.sessions["s1"] = sess
+    app = _SidebarOnlyApp(state)
+    async with app.run_test() as pilot:
+        app.query_one("#sidebar", SidebarWidget).refresh_sessions()
+        await pilot.pause()  # crash would surface here
+
+
+def test_chat_pane_escape_preserves_backslashes_and_neutralizes_markup():
+    from blemees_tui.widgets.chat_pane import _escape
+
+    # The old hand-rolled escaper collapsed double-backslashes (verified
+    # corruption) and could be bypassed for markup injection (#16).
+    assert "\\\\" in _escape("C:\\\\path")
+    from rich.text import Text
+
+    rendered = Text.from_markup(_escape("[bold]x[/bold] [red]y[/]"))
+    assert rendered.plain == "[bold]x[/bold] [red]y[/]"
+    assert not rendered.spans  # no styling leaked through
+
+
+@pytest.mark.asyncio
+async def test_event_log_formatting_survives_hostile_text(isolated_state_dir, monkeypatch):
+    from rich.text import Text
+
+    from blemees_tui.state import EventLogEntry, EventLogSource
+    from blemees_tui.widgets.event_log import _format_entry
+
+    entry = EventLogEntry(
+        ts_ms=0,
+        source=EventLogSource.DAEMON_ERROR,
+        category="bad[category]",
+        message="bad [/] markup [reverse]attack",
+        session_id="s1",
+    )
+    # Renders as literal text, no MarkupError, no styling injection — for
+    # the message AND the category/sid fields.
+    rendered = Text.from_markup(_format_entry(entry))
+    assert "bad [/] markup" in rendered.plain
+    assert "bad[category]" in rendered.plain
+
+
+@pytest.mark.asyncio
+async def test_debug_pane_survives_hostile_frame_reprs():
+    from collections import deque
+
+    from blemees_tui.widgets.debug_pane import DebugPane
+
+    frames = deque([("in", {"type": "session.update", "text": "bad [/] markup [bold]x"})])
+    app = _ChatOnlyApp()
+    async with app.run_test() as pilot:
+        app.push_screen(DebugPane(frames))
+        await pilot.pause()  # MarkupError would crash here

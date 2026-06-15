@@ -16,6 +16,7 @@ import difflib
 from datetime import UTC, datetime
 
 from rich.console import Group, RenderableType
+from rich.markup import escape as rich_escape
 from rich.syntax import Syntax
 from rich.text import Text
 from textual.app import ComposeResult
@@ -667,7 +668,7 @@ def _format_tool(block: ToolUseBlock) -> RenderableType:
     elif block.status == "in_progress":
         head = f"[$warning]{head}[/]"
     if block.result_text:
-        preview = block.result_text.strip().splitlines()[0][:120]
+        preview = (block.result_text.strip().splitlines() or [""])[0][:120]
         colour = "red" if failed else "dim"
         head += f"\n  [{colour}]→ {_escape(preview)}[/]"
     return head
@@ -741,7 +742,7 @@ def _format_edit_diff(name: str, value, block: ToolUseBlock) -> RenderableType |
     )
     parts: list[RenderableType] = [head, syntax]
     if block.result_text:
-        preview = block.result_text.strip().splitlines()[0][:120]
+        preview = (block.result_text.strip().splitlines() or [""])[0][:120]
         style = "red" if block.is_error else "dim"
         parts.append(Text(f"  → {preview}", style=style))
     return Group(*parts)
@@ -773,7 +774,7 @@ def _format_write_content(name: str, value, block: ToolUseBlock) -> RenderableTy
     )
     parts: list[RenderableType] = [head, syntax]
     if block.result_text:
-        preview = block.result_text.strip().splitlines()[0][:120]
+        preview = (block.result_text.strip().splitlines() or [""])[0][:120]
         style = "red" if block.is_error else "dim"
         parts.append(Text(f"  → {preview}", style=style))
     return Group(*parts)
@@ -849,8 +850,13 @@ def _lexer_for_path(path: str) -> str | None:
 
 
 def _escape(text: str) -> str:
-    """Escape Rich markup characters to avoid the user injecting tags."""
-    return text.replace("[", r"\[").replace("\\\\", "\\")
+    """Escape Rich markup in untrusted text (agent output, tool data).
+
+    Delegates to ``rich.markup.escape`` — the previous hand-rolled version
+    corrupted double-backslashes and could be bypassed for markup
+    injection (#16).
+    """
+    return rich_escape(text)
 
 
 def _banner_text(session: SessionState, mode: str) -> str:
