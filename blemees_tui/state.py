@@ -140,6 +140,11 @@ class SessionState:
     # stall / auth_required / agent crash; cleared on attach or resolution.
     needs_attention: bool = False
     attention_reason: str | None = None
+    # Soft attention tier (#22): a turn finished while this session wasn't
+    # the active one — "ready for you". Set by the app on session.result for
+    # background sessions, cleared when the session becomes active. Transient
+    # UI state; deliberately not snapshotted.
+    ready_for_you: bool = False
     # A relayed tool-permission request awaiting the owner's decision (#4):
     # ``{request_id, options: [{option_id, name, kind}], tool_call}``. Rendered
     # as an inline card; cleared once answered or when the turn ends.

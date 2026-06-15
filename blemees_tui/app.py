@@ -106,6 +106,7 @@ class BlemeesTuiApp(App):
             Binding(f"f{i}", f"select_session({i})", f"Session {i}", show=False)
             for i in range(1, 13)
         ],
+        Binding("a", "jump_attention", "Jump to attention", show=False),
         Binding("t", "toggle_thinking", "Toggle thinking", show=False),
         Binding("m", "toggle_mark", "Mark / unmark for broadcast", show=False),
         Binding("colon", "focus_composer_command", "Command", show=False),
@@ -302,6 +303,9 @@ class BlemeesTuiApp(App):
                 self.state.sessions[sid] = sess
             if sess is not None:
                 reduce_frame(sess, frame)
+                if ftype == "session.result" and sid != self.state.active_session_id:
+                    # A background turn finished — surface it in the inbox (#22).
+                    sess.ready_for_you = True
                 if ftype == "session.result":
                     # Refresh context_tokens / cumulative usage for the footer
                     # — fire-and-forget; reply handled via the reducer.
@@ -597,6 +601,9 @@ class BlemeesTuiApp(App):
 
         # Selecting a session with a pending permission jumps to its card (#4).
         new_sess = self.state.sessions.get(sid) if sid else None
+        if new_sess is not None:
+            # Viewing the session consumes its "ready for you" marker (#22).
+            new_sess.ready_for_you = False
         if new_sess is not None and new_sess.pending_permission:
             try:
                 chat = self.query_one("#chat", ChatPaneWidget)
@@ -787,6 +794,23 @@ class BlemeesTuiApp(App):
             self._set_active_session(ids[(i + step) % len(ids)])
         else:
             self._set_active_session(ids[0])
+        self._refresh_ui()
+
+    def action_jump_attention(self) -> None:
+        """Select the highest-priority inbox session (#22): blocked first,
+        then ready-for-you, insertion-order stable within a tier."""
+        from .widgets.sidebar import attention_tier
+
+        candidates = [
+            (tier, order, sid)
+            for order, (sid, sess) in enumerate(self.state.sessions.items())
+            if (tier := attention_tier(sess)) <= 1
+        ]
+        if not candidates:
+            self.notify("Nothing needs attention.", severity="information")
+            return
+        candidates.sort()
+        self._set_active_session(candidates[0][2])
         self._refresh_ui()
 
     def action_event_log(self) -> None:

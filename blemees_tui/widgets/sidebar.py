@@ -29,6 +29,7 @@ class SidebarWidget(Widget):
     sessions yet still show (dimmed) so the roster is visible up front."""
 
     DEFAULT_CSS = """
+    SidebarWidget .-hidden { display: none; }
     SidebarWidget {
         width: 28;
         border-right: tall $accent;
@@ -49,6 +50,8 @@ class SidebarWidget(Widget):
             yield Label("[dim]Ctrl+N · new[/]")
             yield Label("[dim]Ctrl+T · attach[/]")
             yield Static("", classes="profile", id="sidebar-profile")
+            yield Static("─ attention ─", classes="section -hidden", id="sidebar-attn-header")
+            yield Vertical(id="sidebar-attn", classes="-hidden")
             yield Vertical(id="sidebar-tree")
 
     def refresh_sessions(self, *, active_id: str | None = None) -> None:
@@ -57,6 +60,8 @@ class SidebarWidget(Widget):
         profile_line.display = bool(prof)
         if prof:
             profile_line.update(f"[dim]profile: {_escape_markup(prof)}[/]")
+
+        self._refresh_attention(active_id)
 
         tree = self.query_one("#sidebar-tree", Vertical)
         tree.remove_children()
@@ -104,6 +109,29 @@ class SidebarWidget(Widget):
             for idx, sid, sess in members:
                 tree.mount(Static(_session_row(idx, sid, sess, active_id), classes="session"))
 
+    def _refresh_attention(self, active_id: str | None) -> None:
+        """The inbox section (#22): tier 0 (blocked) then tier 1 (ready),
+        insertion-order stable within each tier — membership changes only on
+        state transitions, never during streaming."""
+        attn = self.query_one("#sidebar-attn", Vertical)
+        header = self.query_one("#sidebar-attn-header", Static)
+        attn.remove_children()
+        rows = [
+            (tier, idx, sid, sess)
+            for idx, (sid, sess) in enumerate(self._state.sessions.items(), start=1)
+            if (tier := attention_tier(sess)) <= 1
+        ]
+        rows.sort(key=lambda r: (r[0], r[1]))
+        attn.set_class(not rows, "-hidden")
+        header.set_class(not rows, "-hidden")
+        for _tier, idx, sid, sess in rows:
+            label = _escape_markup(sess.title or sid[:8])
+            badge = attention_badge(sess)
+            row = f" {idx} {label}  {badge}"
+            if sid == active_id:
+                row = f" [reverse] {idx} [/] {label}  {badge}"
+            attn.mount(Static(row, classes="row"))
+
 
 def _session_row(idx: int, sid: str, sess, active_id: str | None) -> str:
     icon = _mode_icon(sess.mode)
@@ -126,6 +154,30 @@ def _session_row(idx: int, sid: str, sess, active_id: str | None) -> str:
         # extra glyph. Matches TurnStatusBar's in-flight color.
         row = f"[$warning]{row}[/]"
     return row
+
+
+def attention_tier(sess) -> int:
+    """Pure inbox tiering (#22): 0 = blocked (needs the owner to proceed),
+    1 = ready for you (finished while backgrounded), 2 = busy, 3 = idle."""
+    if sess.pending_permission or sess.needs_attention:
+        return 0
+    if sess.ready_for_you:
+        return 1
+    if sess.turn_active:
+        return 2
+    return 3
+
+
+def attention_badge(sess) -> str:
+    """Short reason chip for the inbox row."""
+    if sess.pending_permission:
+        return "[$error bold]⏳ permission[/]"
+    if sess.needs_attention:
+        reason = (sess.attention_reason or "attention").replace("_", " ")
+        return f"[$error bold]⚠ {_escape_markup(reason)}[/]"
+    if sess.ready_for_you:
+        return "[$success]● done[/]"
+    return ""
 
 
 def _mode_icon(mode: SessionMode) -> str:
