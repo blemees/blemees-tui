@@ -318,6 +318,8 @@ def _on_session_opened(state: SessionState, frame: dict[str, Any]) -> None:
     """
     if frame.get("profile"):
         state.backend = str(frame["profile"])  # repurposed label as the profile name
+    if frame.get("agent"):
+        state.agent = str(frame["agent"])
     if frame.get("model"):
         state.model = str(frame["model"])
     # view_only (#23/#3): resumed against an agent that couldn't reload it.

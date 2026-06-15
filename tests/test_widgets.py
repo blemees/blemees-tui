@@ -472,3 +472,119 @@ async def test_composer_recall_cycles_history():
         composer._recall_step(+1)
         assert composer.query_one("#composer-input").text == ""
         assert composer._recall_index is None
+
+
+def _sidebar_text(app) -> str:
+    box = app.query_one("#sidebar-tree")
+    return "\n".join(str(child.render()) for child in box.children)
+
+
+@pytest.mark.asyncio
+async def test_sidebar_shows_full_agent_roster_including_sessionless():
+    """The sidebar lists every agent in the active profile's roster, even
+    those with no sessions, and shows a live count for those that do."""
+    state = AppState()
+    state.daemon.active_profile = "default"
+    state.daemon.agent_roster = [
+        {"name": "developer", "model": None},
+        {"name": "architect", "model": None},
+        {"name": "tester", "model": None},
+    ]
+    # One live session on `developer`; architect/tester have none.
+    sess = SessionState(session_id="s1", agent="developer", backend="default")
+    state.sessions["s1"] = sess
+    state.active_session_id = "s1"
+
+    app = _SidebarOnlyApp(state)
+    async with app.run_test() as pilot:
+        sidebar = app.query_one("#sidebar", SidebarWidget)
+        sidebar.refresh_sessions(active_id="s1")
+        await pilot.pause()
+        rendered = _sidebar_text(app)
+        # All three agents are listed, regardless of session presence.
+        assert "developer" in rendered
+        assert "architect" in rendered
+        assert "tester" in rendered
+        # developer has one live session → count shown.
+        assert "(1)" in rendered
+
+
+@pytest.mark.asyncio
+async def test_sidebar_nests_sessions_under_their_agent():
+    """Sessions render indented beneath their agent header, not as a
+    separate flat list."""
+    state = AppState()
+    state.daemon.active_profile = "default"
+    state.daemon.agent_roster = [
+        {"name": "developer", "model": None},
+        {"name": "architect", "model": None},
+    ]
+    state.sessions["s1"] = SessionState(
+        session_id="s1", agent="developer", backend="default", title="build-api"
+    )
+    state.sessions["s2"] = SessionState(
+        session_id="s2", agent="architect", backend="default", title="design-doc"
+    )
+    state.active_session_id = "s1"
+
+    app = _SidebarOnlyApp(state)
+    async with app.run_test() as pilot:
+        sidebar = app.query_one("#sidebar", SidebarWidget)
+        sidebar.refresh_sessions(active_id="s1")
+        await pilot.pause()
+        box = app.query_one("#sidebar-tree")
+        rows = [(type(c).__name__, str(c.render()), c.classes) for c in box.children]
+        # developer header is immediately followed by its session row.
+        headers = [i for i, (_, txt, cls) in enumerate(rows) if "agent-header" in cls]
+        assert headers, "expected agent headers"
+        dev_idx = next(i for i, (_, txt, _) in enumerate(rows) if "developer" in txt)
+        assert "build-api" in rows[dev_idx + 1][1]
+        assert "session" in rows[dev_idx + 1][2]
+
+
+@pytest.mark.asyncio
+async def test_sidebar_restricts_sessions_to_active_profile():
+    """Only sessions whose backend matches the active profile are shown,
+    and their numeric index is scoped to that visible set."""
+    state = AppState()
+    state.daemon.active_profile = "default"
+    state.daemon.agent_roster = [{"name": "developer", "model": None}]
+    # In-profile session, plus one from another profile that must be hidden.
+    state.sessions["s1"] = SessionState(
+        session_id="s1", agent="developer", backend="default", title="mine"
+    )
+    state.sessions["s2"] = SessionState(
+        session_id="s2", agent="developer", backend="other", title="theirs"
+    )
+
+    # Selection scope agrees with the display.
+    assert state.visible_session_ids() == ["s1"]
+
+    app = _SidebarOnlyApp(state)
+    async with app.run_test() as pilot:
+        sidebar = app.query_one("#sidebar", SidebarWidget)
+        sidebar.refresh_sessions(active_id="s1")
+        await pilot.pause()
+        rendered = _sidebar_text(app)
+        assert "mine" in rendered
+        assert "theirs" not in rendered
+
+
+@pytest.mark.asyncio
+async def test_sidebar_shows_all_sessions_before_profile_known():
+    """Before connect (no active_profile) every session is visible — the
+    pre-connect behavior is preserved."""
+    state = AppState()
+    state.sessions["s1"] = SessionState(session_id="s1", agent="developer", title="a")
+    state.sessions["s2"] = SessionState(session_id="s2", agent="architect", title="b")
+    assert state.visible_session_ids() == ["s1", "s2"]
+
+    app = _SidebarOnlyApp(state)
+    async with app.run_test() as pilot:
+        sidebar = app.query_one("#sidebar", SidebarWidget)
+        sidebar.refresh_sessions(active_id=None)
+        await pilot.pause()
+        rendered = _sidebar_text(app)
+        assert "a" in rendered and "b" in rendered
+        # No profile → the profile line is hidden.
+        assert app.query_one("#sidebar-profile").display is False

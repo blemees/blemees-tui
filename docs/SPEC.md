@@ -457,17 +457,24 @@ bubble at their wall-clock position **and** land in the event log:
 ┌─ Sessions ─────────┬─ proj-a · claude · sonnet ──────────────────────┐
 │ + New (Ctrl+N)     │ you  > refactor utils.py                          │
 │ + Attach (Ctrl+T)  │ ▸ Read utils.py                                   │
-│ ─ live ─           │ ▸ Edit utils.py                                   │
-│ ▸ proj-a (1)    ●  │ ai  > Done. Renamed `frob()` → `frobnicate()`.   │
-│   proj-b (2)       │ ─── 1.4s · ↑320 ↓580 · ctx 14k/200k ────────── │
-│   ci-deploy 👀     │                                                    │
-│ ─ history ─        │ ┌─ compose (Enter to send) ───────────────────┐ │
-│   old-thing  ⊘     │ │ _                                            │ │
+│ profile: default   │ ▸ Edit utils.py                                   │
+│ ● developer (1)    │ ai  > Done. Renamed `frob()` → `frobnicate()`.   │
+│   1 ● build-api ●  │ ─── 1.4s · ↑320 ↓580 · ctx 14k/200k ────────── │
+│ ● architect (1)    │                                                    │
+│   2 👀 ci-deploy   │ ┌─ compose (Enter to send) ───────────────────┐ │
+│ ○ tester           │ │ _                                            │ │
 │                    │ └──────────────────────────────────────────────┘ │
 ├────────────────────┴─────────────────────────────────────────────────┤
 │ ● daemon 0.9.0 · claude 2.1 codex 0.125 · 5 turns · ctx 14k/200k · ! │
 └──────────────────────────────────────────────────────────────────────┘
 ```
+
+Sessions are scoped to the active profile (`--profile`, else the first
+configured profile) and nested under their agent: each roster agent is a
+header (dimmed `○` when it has no sessions yet, `●` with a live count when it
+does), and that agent's sessions are indented beneath it with the numeric
+index used by `1`..`9` / `:select`. Sessions belonging to other profiles stay
+in the registry (reachable via `:attach`) but are not listed or indexed here.
 
 | Key                              | Action                                       |
 |----------------------------------|----------------------------------------------|

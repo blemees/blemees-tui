@@ -19,10 +19,13 @@ class SidebarWidget(Widget):
     (``1``–``9`` and ``Ctrl+Tab``), so the rows are plain Static widgets —
     no ListView focus or selection noise.
 
-    Live sessions are grouped by ``cwd`` under a dim path header so it's
-    obvious which sessions belong to which project. The numeric index next
-    to each row is the global insertion-order index (matches ``F<N>`` and
-    ``:select N``) — grouping is visual only and does not renumber."""
+    Sessions are scoped to the active profile (``daemon.active_profile``) and
+    nested under their agent: each agent from the profile's roster is a
+    header, and that agent's live sessions are indented beneath it. The
+    numeric index next to each session is its position in the *visible*
+    (current-profile) ordering, so it matches ``F<N>`` / ``:select N`` /
+    ``Ctrl+Tab``, which resolve against the same scope. Agents with no
+    sessions yet still show (dimmed) so the roster is visible up front."""
 
     DEFAULT_CSS = """
     SidebarWidget {
@@ -30,8 +33,9 @@ class SidebarWidget(Widget):
         border-right: tall $accent;
     }
     SidebarWidget Static.row { height: 1; padding: 0 1; }
-    SidebarWidget Static.section { height: 1; padding: 0 1; color: $text-muted; }
-    SidebarWidget Static.cwd-header { height: 1; padding: 0 1; color: $text-muted; }
+    SidebarWidget Static.session { height: 1; padding: 0 1 0 3; }
+    SidebarWidget Static.agent-header { height: 1; padding: 0 1; }
+    SidebarWidget Static.profile { height: 1; padding: 0 1; color: $text-muted; }
     """
 
     def __init__(self, state: AppState, **kwargs) -> None:
@@ -43,44 +47,84 @@ class SidebarWidget(Widget):
             yield Label("[b]Sessions[/b]")
             yield Label("[dim]Ctrl+N · new[/]")
             yield Label("[dim]Ctrl+T · attach[/]")
-            yield Static("─ live ─", classes="section", id="sidebar-live-header")
-            yield Vertical(id="sidebar-live")
+            yield Static("", classes="profile", id="sidebar-profile")
+            yield Vertical(id="sidebar-tree")
 
     def refresh_sessions(self, *, active_id: str | None = None) -> None:
-        live = self.query_one("#sidebar-live", Vertical)
-        live.remove_children()
+        prof = self._state.daemon.active_profile
+        profile_line = self.query_one("#sidebar-profile", Static)
+        profile_line.display = bool(prof)
+        if prof:
+            profile_line.update(f"[dim]profile: {_escape_markup(prof)}[/]")
 
-        # Group by cwd while preserving insertion order — both for the
-        # groups themselves (first-seen cwd appears first) and for sessions
-        # within a group. Index is taken from the global enumeration so it
-        # still matches F<N> / :select N.
-        groups: OrderedDict[str, list[tuple[int, str, object]]] = OrderedDict()
-        for idx, (sid, sess) in enumerate(self._state.sessions.items(), start=1):
-            groups.setdefault(sess.cwd or "", []).append((idx, sid, sess))
+        tree = self.query_one("#sidebar-tree", Vertical)
+        tree.remove_children()
 
-        for cwd, members in groups.items():
-            live.mount(Static(f"[dim]{_escape_markup(_format_cwd(cwd))}[/]", classes="cwd-header"))
+        # Visible = active-profile sessions, in the same order F<N> resolves.
+        # The numeric label is the 1-based position in this list.
+        by_agent: OrderedDict[str, list[tuple[int, str, object]]] = OrderedDict()
+        active_agent: str | None = None
+        for idx, (sid, sess) in enumerate(self._state.visible_session_items(), start=1):
+            by_agent.setdefault(sess.agent or "", []).append((idx, sid, sess))
+            if sid == active_id:
+                active_agent = sess.agent or ""
+
+        # Agent order: the roster first (so every configured agent shows, even
+        # sessionless ones), then any agent that has visible sessions but isn't
+        # in the roster (defensive — shouldn't normally happen within a
+        # profile). Empty-agent sessions sort last under a placeholder header.
+        order: list[str] = []
+        for entry in self._state.daemon.agent_roster:
+            name = str(entry.get("name", ""))
+            if name and name not in order:
+                order.append(name)
+        for name in by_agent:
+            if name and name not in order:
+                order.append(name)
+        if "" in by_agent:
+            order.append("")
+
+        for name in order:
+            members = by_agent.get(name, [])
+            live_count = sum(
+                1 for _, _, s in members if s.mode != SessionMode.CLOSED
+            )
+            label = _escape_markup(name) if name else "(no agent)"
+            count_txt = f" [dim]({live_count})[/]" if live_count else ""
+            if members:
+                header = f"● {label}{count_txt}"
+            else:
+                # Dim agents that have no session yet.
+                header = f"[dim]○ {label}[/]"
+            if name == active_agent:
+                header = f"[reverse] {label} [/]{count_txt}"
+            tree.mount(Static(header, classes="agent-header"))
+
             for idx, sid, sess in members:
-                icon = _mode_icon(sess.mode)
-                label = sess.title or sid[:8]
-                busy = sess.turn_active
-                # Leading mark glyph (◆ when marked for ``>>`` broadcast,
-                # space gap otherwise so all rows align).
-                mark = "[$accent]◆[/]" if sess.marked else " "
-                # Attention badge (#4): a pending permission or a needs_attention
-                # flag the owner should act on, shown for background sessions too.
-                badge = ""
-                if sess.pending_permission or sess.needs_attention:
-                    badge = " [$error bold]●[/]"
-                row = f"{mark} {idx} {icon} {label}{badge}"
-                if sid == active_id:
-                    row = f"{mark} [reverse] {idx} [/] {icon} {label}{badge}"
-                if busy:
-                    # $warning tint signals "agent is working" without the
-                    # noise of an extra glyph. Matches TurnStatusBar's
-                    # in-flight color so the two read as the same state.
-                    row = f"[$warning]{row}[/]"
-                live.mount(Static(row, classes="row"))
+                tree.mount(Static(_session_row(idx, sid, sess, active_id), classes="session"))
+
+
+def _session_row(idx: int, sid: str, sess, active_id: str | None) -> str:
+    icon = _mode_icon(sess.mode)
+    label = sess.title or sid[:8]
+    cwd_txt = f" [dim]{_escape_markup(_format_cwd(sess.cwd))}[/]" if sess.cwd else ""
+    # Leading mark glyph (◆ when marked for ``>>`` broadcast, space gap
+    # otherwise so all rows align).
+    mark = "[$accent]◆[/]" if sess.marked else " "
+    # Attention badge (#4): a pending permission or a needs_attention flag the
+    # owner should act on, shown for background sessions too.
+    badge = ""
+    if sess.pending_permission or sess.needs_attention:
+        badge = " [$error bold]●[/]"
+    if sid == active_id:
+        row = f"{mark} [reverse] {idx} [/] {icon} {label}{badge}{cwd_txt}"
+    else:
+        row = f"{mark} {idx} {icon} {label}{badge}{cwd_txt}"
+    if sess.turn_active:
+        # $warning tint signals "agent is working" without the noise of an
+        # extra glyph. Matches TurnStatusBar's in-flight color.
+        row = f"[$warning]{row}[/]"
+    return row
 
 
 def _mode_icon(mode: SessionMode) -> str:

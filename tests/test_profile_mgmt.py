@@ -9,7 +9,7 @@ textual = pytest.importorskip("textual")
 
 from blemees_tui.app import BlemeesTuiApp  # noqa: E402
 from blemees_tui.connection import ConnectionError_  # noqa: E402
-from blemees_tui.widgets.modals import NewSessionModal  # noqa: E402
+from blemees_tui.widgets.modals import AgentEditorModal  # noqa: E402
 
 
 async def _start_app_no_socket(monkeypatch):
@@ -33,7 +33,7 @@ async def test_save_profile_creates(isolated_state_dir, monkeypatch):
     app = BlemeesTuiApp()
     async with app.run_test():
         spec = {"agent": {"agent_command": "claude-agent-acp"}}
-        await app.on_new_session_modal_save_profile(NewSessionModal.SaveProfile("mine", spec))
+        await app.on_agent_editor_modal_save_profile(AgentEditorModal.SaveProfile("mine", spec))
         assert created == [("mine", spec)]
 
 
@@ -53,8 +53,8 @@ async def test_save_profile_falls_back_to_update_on_exists(isolated_state_dir, m
     monkeypatch.setattr("blemees_tui.connection.Connection.update_profile", fake_update)
     app = BlemeesTuiApp()
     async with app.run_test():
-        await app.on_new_session_modal_save_profile(
-            NewSessionModal.SaveProfile("mine", {"agent": {}})
+        await app.on_agent_editor_modal_save_profile(
+            AgentEditorModal.SaveProfile("mine", {"agent": {}})
         )
         assert updated == ["mine"]
 
@@ -70,8 +70,8 @@ async def test_save_profile_agent_unavailable_is_graceful(isolated_state_dir, mo
     app = BlemeesTuiApp()
     async with app.run_test():
         # Must not raise — the error is surfaced, not fatal.
-        await app.on_new_session_modal_save_profile(
-            NewSessionModal.SaveProfile("bad", {"agent": {}})
+        await app.on_agent_editor_modal_save_profile(
+            AgentEditorModal.SaveProfile("bad", {"agent": {}})
         )
         log = [e.category for e in app.state.event_log]
         assert "profile_save_failed" in log
@@ -89,5 +89,5 @@ async def test_delete_profile(isolated_state_dir, monkeypatch):
     monkeypatch.setattr("blemees_tui.connection.Connection.delete_profile", fake_delete)
     app = BlemeesTuiApp()
     async with app.run_test():
-        await app.on_new_session_modal_delete_profile(NewSessionModal.DeleteProfile("mine"))
+        await app.on_agent_editor_modal_delete_profile(AgentEditorModal.DeleteProfile("mine"))
         assert deleted == ["mine"]

@@ -26,6 +26,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Override path to config.toml (also $BLEMEES_TUI_CONFIG).",
     )
     p.add_argument(
+        "--profile",
+        default=None,
+        help="Restrict the TUI to a single agentd profile; only this profile "
+        "is offered when opening a session.",
+    )
+    p.add_argument(
         "--log-level",
         default=None,
         choices=["debug", "info", "warn", "error"],
@@ -43,6 +49,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         socket_override=args.socket,
         config_path_override=args.config,
         log_level_override=args.log_level,
+        profile_override=args.profile,
     )
     app.run()
     return getattr(app, "return_code", 0) or 0

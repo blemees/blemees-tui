@@ -101,7 +101,8 @@ class Turn:
 @dataclass
 class SessionState:
     session_id: str
-    backend: str = ""
+    backend: str = ""  # profile name (see _on_session_opened)
+    agent: str = ""  # agent name within the profile (from session.opened)
     model: str = ""
     cwd: str = ""
     title: str = ""
@@ -239,6 +240,15 @@ class DaemonInfo:
     # Detected ACP agents (name → version-ish) and configured profile names.
     agents: dict[str, str] = field(default_factory=dict)
     profiles: list[str] = field(default_factory=list)
+    # The profile the TUI is scoped to (the ``--profile`` one, else the first
+    # profile from ``profile.list``), set alongside ``agent_roster``. This is
+    # the selection + display scope: only its sessions appear in the sidebar
+    # and are reachable via F<N> / :select / Ctrl+Tab. Empty until connect.
+    active_profile: str = ""
+    # Agents of the active profile, fetched on connect. Each entry is a
+    # ``{"name", "model"}`` dict. Lets the sidebar show the full agent roster
+    # even for agents that have no sessions yet.
+    agent_roster: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -261,3 +271,28 @@ class AppState:
     connection_status: str = "disconnected"  # connected | reconnecting | disconnected
     reconnect_attempt: int = 0
     rate_limits: RateLimitsNotice | None = None
+
+    def visible_session_items(self) -> list[tuple[str, SessionState]]:
+        """``(sid, session)`` pairs in the active profile, insertion order.
+
+        The active profile is the selection + display scope (blemees-tui#B):
+        only these sessions appear in the sidebar and are reachable via
+        F<N> / :select / Ctrl+Tab. Off-profile sessions remain in
+        ``sessions`` (so :attach and session.list still see them) but are
+        not indexed. Before a profile is known (pre-connect, empty
+        ``active_profile``) every session is visible, preserving the old
+        behavior. A session whose ``backend`` is untagged is matched by
+        roster membership so freshly-opened rows aren't briefly hidden."""
+        prof = self.daemon.active_profile
+        if not prof:
+            return list(self.sessions.items())
+        roster = {str(e.get("name", "")) for e in self.daemon.agent_roster}
+        return [
+            (sid, s)
+            for sid, s in self.sessions.items()
+            if s.backend == prof or (not s.backend and s.agent in roster)
+        ]
+
+    def visible_session_ids(self) -> list[str]:
+        """Ordered session ids that F<N> / :select / Ctrl+Tab resolve against."""
+        return [sid for sid, _ in self.visible_session_items()]

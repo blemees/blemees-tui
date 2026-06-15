@@ -55,7 +55,7 @@ from .widgets import (
     TodoPanel,
     TurnStatusBar,
 )
-from .widgets.modals import AttachModal, HelpModal, NewSessionModal
+from .widgets.modals import AgentEditorModal, AttachModal, HelpModal, NewSessionModal
 
 
 class BlemeesTuiApp(App):
@@ -88,6 +88,7 @@ class BlemeesTuiApp(App):
 
     BINDINGS = [
         Binding("ctrl+n", "new_session", "New"),
+        Binding("ctrl+g", "edit_agents", "Add agent"),
         Binding("ctrl+t", "attach", "Attach"),
         Binding("ctrl+w", "close_session", "Close"),
         Binding("ctrl+shift+w", "delete_session", "Delete"),
@@ -130,9 +131,13 @@ class BlemeesTuiApp(App):
         socket_override: str | None = None,
         config_path_override: str | None = None,
         log_level_override: str | None = None,
+        profile_override: str | None = None,
     ) -> None:
         super().__init__()
         self._config_path = config_path_override
+        # When set (via --profile), the TUI only ever offers this one profile
+        # when opening a session.
+        self._profile_override = profile_override
         self.config_obj: Config = apply_cli_overrides(
             load_config(),
             socket=socket_override,
@@ -267,6 +272,9 @@ class BlemeesTuiApp(App):
             self.state.event_log.append(
                 EventLogSource.CONNECTION, "hello", f"connected to {self.state.daemon.daemon}"
             )
+            # Pull the active profile's agent roster so the sidebar can show
+            # every agent up front, even those with no sessions yet.
+            self._schedule_refresh_roster()
         elif ftype == "error" and "session_id" not in frame:
             # Connection-scope error — log; reducer doesn't see it.
             code = str(frame.get("code", ""))
@@ -325,6 +333,36 @@ class BlemeesTuiApp(App):
                 session_id=session_id,
                 received_at_ms=int(time.time() * 1000),
             )
+
+    def _schedule_refresh_roster(self) -> None:
+        if self._connection is None:
+            return
+
+        async def _fetch() -> None:
+            try:
+                assert self._connection is not None
+                profiles = await self._connection.list_profiles()
+            except Exception:
+                # Connection layer logs; the sidebar simply omits the roster.
+                return
+            chosen: dict[str, Any] | None = None
+            if self._profile_override is not None:
+                chosen = next(
+                    (p for p in profiles if p.get("name") == self._profile_override), None
+                )
+            elif profiles:
+                chosen = profiles[0]
+            roster: list[dict[str, Any]] = []
+            if chosen is not None:
+                for ag in chosen.get("agents") or []:
+                    name = ag.get("name")
+                    if name:
+                        roster.append({"name": str(name), "model": ag.get("model")})
+            self.state.daemon.active_profile = str(chosen.get("name", "")) if chosen else ""
+            self.state.daemon.agent_roster = roster
+            self._refresh_ui()
+
+        asyncio.create_task(_fetch())
 
     def _schedule_session_info(self, session_id: str) -> None:
         if self._connection is None:
@@ -667,13 +705,13 @@ class BlemeesTuiApp(App):
         self._cycle_session(-1)
 
     def action_select_session(self, index: int) -> None:
-        ids = list(self.state.sessions.keys())
+        ids = self.state.visible_session_ids()
         if 1 <= index <= len(ids):
             self._set_active_session(ids[index - 1])
             self._refresh_ui()
 
     def _cycle_session(self, step: int) -> None:
-        ids = list(self.state.sessions.keys())
+        ids = self.state.visible_session_ids()
         if not ids:
             return
         if self.state.active_session_id in ids:
@@ -702,10 +740,28 @@ class BlemeesTuiApp(App):
     def action_new_session(self) -> None:
         async def _fetch_profiles() -> list[dict[str, Any]]:
             if self._connection is None:
-                return [{"name": n, "source": "config"} for n in self.state.daemon.profiles]
-            return await self._connection.list_profiles()
+                profiles = [{"name": n, "source": "config"} for n in self.state.daemon.profiles]
+            else:
+                profiles = await self._connection.list_profiles()
+            if self._profile_override is not None:
+                profiles = [p for p in profiles if p.get("name") == self._profile_override]
+                if not profiles:
+                    self.notify(
+                        f"Profile {self._profile_override!r} not found on the daemon.",
+                        severity="warning",
+                    )
+            return profiles
 
-        self.push_screen(NewSessionModal(_fetch_profiles, default_cwd=os.getcwd()))
+        self.push_screen(
+            NewSessionModal(
+                _fetch_profiles,
+                default_cwd=os.getcwd(),
+                profile=self._profile_override or "",
+            )
+        )
+
+    def action_edit_agents(self) -> None:
+        self.push_screen(AgentEditorModal(default_profile=self._profile_override or ""))
 
     def action_attach(self) -> None:
         async def _fetch() -> list[dict[str, Any]]:
@@ -774,7 +830,7 @@ class BlemeesTuiApp(App):
             sid = self.state.active_session_id
             return ([sid] if sid else []), []
 
-        ids_in_order = list(self.state.sessions.keys())
+        ids_in_order = self.state.visible_session_ids()
         resolved: list[str] = []
         errors: list[str] = []
         for token in arg.split():
@@ -820,7 +876,7 @@ class BlemeesTuiApp(App):
             sid = self.state.active_session_id
             return ([sid] if sid else []), [], arg
 
-        ids_in_order = list(self.state.sessions.keys())
+        ids_in_order = self.state.visible_session_ids()
         resolved: list[str] = []
         errors: list[str] = []
         for token in tokens[:numeric_prefix]:
@@ -846,10 +902,12 @@ class BlemeesTuiApp(App):
             return
         sid = str(uuid.uuid4())
         profile = msg.profile or "default"
+        agent = msg.agent or None
         options: dict[str, Any] = {"cwd": msg.cwd} if msg.cwd else {}
         sess = SessionState(
             session_id=sid,
             backend=profile,
+            agent=msg.agent or "",
             cwd=msg.cwd,
             title=msg.title,
             options=options,
@@ -857,10 +915,10 @@ class BlemeesTuiApp(App):
         )
         self.state.sessions[sid] = sess
         self._set_active_session(sid)
-        self._connection.track_owned(sid, profile=profile, options=options)
+        self._connection.track_owned(sid, profile=profile, agent=agent, options=options)
         try:
             await self._connection.open_session(
-                sid, profile=profile, options=options, alias=msg.title or None
+                sid, profile=profile, agent=agent, options=options, alias=msg.title or None
             )
         except Exception as exc:
             self.state.event_log.append(
@@ -872,7 +930,7 @@ class BlemeesTuiApp(App):
         self._persist_sessions()
         self._refresh_ui()
 
-    async def on_new_session_modal_save_profile(self, msg: NewSessionModal.SaveProfile) -> None:
+    async def on_agent_editor_modal_save_profile(self, msg: AgentEditorModal.SaveProfile) -> None:
         if self._connection is None:
             return
         # Create, falling back to update if the profile already exists (#25/#5).
@@ -896,7 +954,7 @@ class BlemeesTuiApp(App):
         self.notify(f"Profile {msg.name!r} saved.")
         self._refresh_ui()
 
-    async def on_new_session_modal_delete_profile(self, msg: NewSessionModal.DeleteProfile) -> None:
+    async def on_agent_editor_modal_delete_profile(self, msg: AgentEditorModal.DeleteProfile) -> None:
         if self._connection is None:
             return
         try:
