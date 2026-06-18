@@ -6,7 +6,6 @@ import os
 from collections import OrderedDict
 from pathlib import Path
 
-from rich.markup import escape as rich_escape
 from textual.app import ComposeResult
 from textual.containers import Vertical
 from textual.widget import Widget
@@ -211,6 +210,9 @@ def _format_cwd(cwd: str) -> str:
 
 
 def _escape_markup(text: str) -> str:
-    """Escape Rich markup in user-controlled text (paths, titles) — rich's
-    own escaper, not a naive ``[``-replace (#16)."""
-    return rich_escape(text)
+    """Escape markup in user-controlled text (paths, titles) for Textual's
+    ``Static`` parser. Must escape every ``[`` — ``rich.markup.escape`` only
+    escapes brackets that open a valid *Rich* tag, so e.g. a title or path
+    containing ``[HumanGate(...)]`` slips through and crashes Textual's
+    stricter parser with ``MarkupError`` (#16)."""
+    return text.replace("[", r"\[")

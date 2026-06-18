@@ -16,7 +16,6 @@ import difflib
 from datetime import UTC, datetime
 
 from rich.console import Group, RenderableType
-from rich.markup import escape as rich_escape
 from rich.syntax import Syntax
 from rich.text import Text
 from textual.app import ComposeResult
@@ -859,13 +858,20 @@ def _lexer_for_path(path: str) -> str | None:
 
 
 def _escape(text: str) -> str:
-    """Escape Rich markup in untrusted text (agent output, tool data).
+    """Escape markup in untrusted text (agent output, tool data) so it can be
+    safely interpolated into a Textual markup string rendered by ``Static``.
 
-    Delegates to ``rich.markup.escape`` — the previous hand-rolled version
-    corrupted double-backslashes and could be bypassed for markup
-    injection (#16).
+    Must escape for *Textual's* markup parser, not Rich's. ``rich.markup.escape``
+    only escapes brackets that open a valid *Rich* tag (lowercase/`#`/`/`/`@`),
+    so a tool-output token like ``[HumanGate(id="g", on_timeout="trust")]``
+    slips through unescaped — and Textual's stricter parser then tries to read
+    it as a tag with attributes and raises ``MarkupError``, crashing the whole
+    chat pane on render (e.g. when switching to a session whose transcript
+    contains such text). Textual treats ``\\`` as an escape only immediately
+    before ``[``, so escaping every ``[`` is sufficient and leaves ordinary
+    backslashes (paths, ``\\n`` in reprs) intact (#16).
     """
-    return rich_escape(text)
+    return text.replace("[", r"\[")
 
 
 def _banner_text(session: SessionState, mode: str) -> str:

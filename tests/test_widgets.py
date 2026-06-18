@@ -16,11 +16,15 @@ from blemees_tui.state import (  # noqa: E402
     AppState,
     RateLimitsNotice,
     SessionState,  # noqa: E402
+    ToolUseBlock,
+    Turn,
 )
 from blemees_tui.widgets.banner import ConnectionBanner  # noqa: E402
 from blemees_tui.widgets.chat_pane import (  # noqa: E402
     ChatPaneWidget,
+    _escape,
     _format_todowrite_summary,
+    _format_tool,
     _TurnBlock,
 )
 from blemees_tui.widgets.composer import ComposerWidget  # noqa: E402
@@ -82,6 +86,66 @@ async def test_chat_pane_incremental_mounts_one_widget_per_turn():
         await pilot.pause()
         two_blocks = list(chat.query(_TurnBlock))
         assert len(two_blocks) == 2
+
+
+def test_escape_neutralizes_uppercase_brackets_for_textual():
+    """``rich.markup.escape`` only escapes brackets that open a valid *Rich*
+    tag (lowercase), so tool output like ``[HumanGate(...)]`` slipped through
+    and crashed Textual's stricter parser. ``_escape`` must escape every
+    ``[`` while leaving ordinary backslashes intact."""
+    raw = 'x = [HumanGate(id="g", on_timeout="trust")]\n  path C:\\temp\\new'
+    escaped = _escape(raw)
+    assert "[" not in escaped.replace(r"\[", "")  # every '[' is backslash-escaped
+    assert "C:\\temp\\new" in escaped  # backslashes preserved
+    # Textual must parse the escaped string back to the original literal text.
+    from textual.content import Content
+
+    assert Content.from_markup(escaped).plain == raw
+
+
+@pytest.mark.asyncio
+async def test_chat_pane_renders_tool_block_with_bracketed_content():
+    """Regression: a tool block whose input/result contains uppercase
+    bracketed text (``[HumanGate(...)]``) must render without raising
+    Textual's ``MarkupError`` and crashing the whole chat pane."""
+    app = _ChatOnlyApp()
+    async with app.run_test() as pilot:
+        chat = app.query_one("#chat", ChatPaneWidget)
+        sess = SessionState(session_id="s1")
+        turn = Turn(user_text="run it", locked=True)
+        turn.blocks.append(
+            ToolUseBlock(
+                tool_use_id="t1",
+                name="Terminal",
+                input={
+                    "command": 'check([HumanGate(id="g", on_timeout="trust", window="2026")])',
+                    "description": "Append 6 triggering tests",
+                },
+                result_text='ok [HumanGate(window="2026")]',
+            )
+        )
+        sess.turns.append(turn)
+        # Would raise MarkupError mid-layout before the fix.
+        chat.show_session(sess, force=True)
+        await pilot.pause()
+        await pilot.pause()
+        assert len(list(chat.query(_TurnBlock))) == 1
+
+
+def test_format_tool_output_parses_under_textual_markup():
+    """The string ``_format_tool`` hands to ``Static`` must be valid Textual
+    markup even when tool input contains bracketed payloads."""
+    from textual.content import Content
+
+    block = ToolUseBlock(
+        tool_use_id="t1",
+        name="Terminal",
+        input={"command": 'f([HumanGate(on_timeout="trust", window="2026")])'},
+        result_text="",
+    )
+    rendered = _format_tool(block)
+    assert isinstance(rendered, str)
+    Content.from_markup(rendered)  # must not raise MarkupError
 
 
 class _FooterOnlyApp(App):
