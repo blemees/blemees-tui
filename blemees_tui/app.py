@@ -210,6 +210,7 @@ class BlemeesTuiApp(App):
                 self.state.sessions[stored.session_id] = SessionState(
                     session_id=stored.session_id,
                     backend=stored.backend,
+                    agent=stored.agent,
                     model=stored.model,
                     cwd=stored.cwd,
                     title=stored.title,
@@ -243,6 +244,7 @@ class BlemeesTuiApp(App):
                 self._connection.track_owned(
                     sess.session_id,
                     profile=sess.backend or None,
+                    agent=sess.agent or None,
                     options=sess.options,
                     last_seen_seq=sess.last_seen_seq,
                 )
@@ -650,6 +652,7 @@ class BlemeesTuiApp(App):
                 StoredSession(
                     session_id=sess.session_id,
                     backend=sess.backend,
+                    agent=sess.agent,
                     model=sess.model,
                     cwd=sess.cwd,
                     title=sess.title,

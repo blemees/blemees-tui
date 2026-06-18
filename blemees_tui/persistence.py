@@ -92,7 +92,7 @@ class StoredSession:
     """One row of ``sessions.json`` (spec §7.5)."""
 
     session_id: str
-    backend: str
+    backend: str  # profile name (e.g. "blemees")
     model: str
     cwd: str
     title: str
@@ -101,11 +101,13 @@ class StoredSession:
     last_active_at_ms: int
     mode: str  # "owned" | "watching" — closed sessions are dropped on close
     marked: bool = False
+    agent: str = ""  # agent name within the profile (e.g. "developer")
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "session_id": self.session_id,
             "backend": self.backend,
+            "agent": self.agent,
             "model": self.model,
             "cwd": self.cwd,
             "title": self.title,
@@ -121,6 +123,7 @@ class StoredSession:
         return cls(
             session_id=str(raw["session_id"]),
             backend=str(raw.get("backend", "")),
+            agent=str(raw.get("agent", "")),
             model=str(raw.get("model", "")),
             cwd=str(raw.get("cwd", "")),
             title=str(raw.get("title", "")),

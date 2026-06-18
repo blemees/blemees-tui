@@ -47,6 +47,48 @@ def test_sessions_round_trip(tmp_path: Path):
     assert loaded[0].marked is True
 
 
+def test_sessions_round_trip_preserves_agent(tmp_path: Path):
+    """The per-session agent (the agent name within the profile) must survive
+    a save/load cycle. Without it, a session opened against ``developer`` is
+    resumed with no agent on next launch and the daemon falls back to the
+    profile's default agent (``product-manager``) — mis-grouping the session
+    in the sidebar and resuming it under the wrong agent."""
+    p = tmp_path / "sessions.json"
+    rows = [
+        StoredSession(
+            session_id="s1",
+            backend="blemees",
+            agent="developer",
+            model="",
+            cwd="/proj",
+            title="inner-loop",
+            options={},
+            last_seen_seq=0,
+            last_active_at_ms=0,
+            mode="owned",
+        )
+    ]
+    save_sessions(rows, p)
+    loaded = load_sessions(p)
+    assert len(loaded) == 1
+    assert loaded[0].agent == "developer"
+
+
+def test_sessions_load_defaults_agent_to_empty_for_old_files(tmp_path: Path):
+    """sessions.json files written before agent persistence shipped don't
+    carry an ``agent`` field. Loader must default it cleanly."""
+    p = tmp_path / "sessions.json"
+    p.write_text(
+        '{"version": 1, "sessions": [{"session_id": "s1", "backend": "blemees", '
+        '"model": "", "cwd": "", "title": "", "options": {}, "last_seen_seq": 0, '
+        '"last_active_at_ms": 0, "mode": "owned"}]}',
+        encoding="utf-8",
+    )
+    loaded = load_sessions(p)
+    assert len(loaded) == 1
+    assert loaded[0].agent == ""
+
+
 def test_sessions_load_defaults_marked_to_false_for_old_files(tmp_path: Path):
     """sessions.json files written before the broadcast feature shipped
     don't carry a ``marked`` field. Loader must default it cleanly."""

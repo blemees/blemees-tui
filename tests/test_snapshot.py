@@ -37,6 +37,7 @@ def _populated_session() -> SessionState:
     sess = SessionState(
         session_id="abc123",
         backend="claude",
+        agent="developer",
         model="sonnet",
         cwd="/tmp",
         title="Demo",
@@ -80,6 +81,7 @@ def test_session_to_dict_round_trip_preserves_blocks_and_usage():
     assert restored is not None
     assert restored.session_id == "abc123"
     assert restored.backend == "claude"
+    assert restored.agent == "developer"
     assert restored.model == "sonnet"
     assert restored.draft == "half-typed message"
     assert restored.mode == SessionMode.OWNED

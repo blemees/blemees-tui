@@ -86,6 +86,7 @@ def session_to_dict(sess: SessionState) -> dict[str, Any]:
         "version": SNAPSHOT_SCHEMA_VERSION,
         "session_id": sess.session_id,
         "backend": sess.backend,
+        "agent": sess.agent,
         "model": sess.model,
         "cwd": sess.cwd,
         "title": sess.title,
@@ -166,6 +167,7 @@ def session_from_dict(d: dict[str, Any]) -> SessionState | None:
     sess = SessionState(
         session_id=sid,
         backend=str(d.get("backend", "")),
+        agent=str(d.get("agent", "")),
         model=str(d.get("model", "")),
         cwd=str(d.get("cwd", "")),
         title=str(d.get("title", "")),
