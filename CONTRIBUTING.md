@@ -52,6 +52,12 @@ pytest -k snapshot              # one keyword
 `tests/test_app_pilot.py` uses Textual's `Pilot` harness for snapshot-style
 scene tests; they don't open a real socket.
 
+`tests/test_e2e_smoke.py` is the one suite that does: it drives the TUI
+against a real `blemees-agentd` and `claude-agent-acp`. It is opt-in
+(`BLEMEES_E2E=1`) and never runs in CI. See
+[`docs/SMOKE.md`](docs/SMOKE.md) for the run options and the manual
+checklist.
+
 ## Lint & format
 
 ```sh

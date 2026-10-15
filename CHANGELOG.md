@@ -7,6 +7,12 @@ project tracks [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **End-to-end smoke (#13).** `tests/test_e2e_smoke.py` drives the TUI
+  through Textual's `Pilot` against a real `blemees-agentd` and
+  `claude-agent-acp`: connect, open under a profile, prompt + stream,
+  inline permission, and viewer reattach. Opt-in with `BLEMEES_E2E=1`;
+  skipped when the agent is not authenticated. `docs/SMOKE.md` has the
+  manual checklist.
 - **Multi-target session commands.** Every session-specific TUI command
   now accepts a leading list of 1-indexed session numbers — empty falls
   back to the active session. Action commands (`:close`, `:delete`,
@@ -50,6 +56,10 @@ project tracks [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   selected for refinement, deferred, or excluded.
 
 ### Fixed
+- A fast agent's reply no longer leaves the session stuck "working".
+  The TUI recorded the user prompt after the send returned, so a
+  `session.result` reduced during the write opened a second turn that
+  never ended. The prompt is now recorded before the send (#13).
 - Tool calls now appear in Claude Code sessions (extracted from
   `agent.message.content` rather than relying on suppressed
   `agent.tool_use` frames).
