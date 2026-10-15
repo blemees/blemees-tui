@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 textual = pytest.importorskip("textual")
@@ -140,3 +142,79 @@ async def test_duplicate_queued_texts_are_not_dropped_on_requeue(isolated_state_
         await app._send_user_message("s1", "same")
         await pilot.pause()
         assert sess.pending_sends == ["same", "same"]
+
+
+@pytest.mark.asyncio
+async def test_broken_pipe_on_send_requeues(isolated_state_dir, monkeypatch):
+    # A dead socket surfaces from drain() as OSError, not ConnectionError_ —
+    # the popped message must still go back on the queue (#20).
+    await _start_app_no_socket(monkeypatch)
+
+    async def _broken(self, *a, **kw):
+        raise BrokenPipeError("broken pipe")
+
+    monkeypatch.setattr("blemees_tui.connection.Connection.send_user", _broken)
+    app = BlemeesTuiApp()
+    async with app.run_test() as pilot:
+        sess = _seed(app)
+        app.state.connection_status = "connected"
+        sess.pending_sends.extend(["first", "second"])
+        await app._flush_pending_sends("s1")
+        await pilot.pause()
+        assert sess.pending_sends == ["first", "second"]
+        assert app.return_code is None
+
+
+@pytest.mark.asyncio
+async def test_cancelled_flush_requeues_message(isolated_state_dir, monkeypatch):
+    # A reconnect flush cancelled mid-send (a newer flap replaced it) must
+    # not drop the message it had already popped (#20).
+    await _start_app_no_socket(monkeypatch)
+    started = asyncio.Event()
+
+    async def _hang(self, *a, **kw):
+        started.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr("blemees_tui.connection.Connection.send_user", _hang)
+    app = BlemeesTuiApp()
+    async with app.run_test() as pilot:
+        sess = _seed(app)
+        app.state.connection_status = "connected"
+        sess.pending_sends.extend(["first", "second"])
+        task = asyncio.create_task(app._flush_pending_sends("s1"))
+        await started.wait()
+        assert sess.pending_sends == ["second"]
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        await pilot.pause()
+        assert sess.pending_sends == ["first", "second"]
+
+
+@pytest.mark.asyncio
+async def test_result_triggered_flush_task_is_referenced(isolated_state_dir, monkeypatch):
+    # Fire-and-forget flush tasks must be held until they finish, or the
+    # event loop may garbage-collect them mid-send (#20).
+    await _start_app_no_socket(monkeypatch)
+    release = asyncio.Event()
+    sent: list[str] = []
+
+    async def _slow(self, sid, text):
+        await release.wait()
+        sent.append(text)
+
+    monkeypatch.setattr("blemees_tui.connection.Connection.send_user", _slow)
+    app = BlemeesTuiApp()
+    async with app.run_test() as pilot:
+        sess = _seed(app)
+        app.state.connection_status = "connected"
+        sess.pending_sends.append("next")
+        app._spawn(app._flush_pending_sends("s1"))
+        await pilot.pause()
+        assert len(app._background_tasks) >= 1
+        release.set()
+        await pilot.pause()
+        await pilot.pause()
+        assert sent == ["next"]
+        assert not any(not t.done() for t in app._background_tasks)

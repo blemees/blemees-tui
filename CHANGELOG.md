@@ -60,6 +60,14 @@ project tracks [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   The TUI recorded the user prompt after the send returned, so a
   `session.result` reduced during the write opened a second turn that
   never ended. The prompt is now recorded before the send (#13).
+- **Connection hardening (#20).** A daemon that accepts but never answers
+  `hello` no longer hangs the TUI — the handshake times out after 10s and
+  reconnects. A missing `pong` (10s deadline) now forces a reconnect, so
+  half-open sockets (SSH-forwarded) are detected. The footer shows
+  "reconnecting" as soon as the socket closes, not after the first backoff
+  wait. A queued message whose send fails with a socket error (or whose
+  flush is cancelled mid-send) goes back on the queue instead of being
+  dropped.
 - Tool calls now appear in Claude Code sessions (extracted from
   `agent.message.content` rather than relying on suppressed
   `agent.tool_use` frames).

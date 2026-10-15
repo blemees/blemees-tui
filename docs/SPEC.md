@@ -155,9 +155,13 @@ Same precedence as `BlemeesClient.connect()`:
 Store `hello_ack.backends` for the new-session modal's backend picker
 (only offer backends the daemon advertises).
 
+No `hello_ack` within 10s → treat as a failed connect and reconnect with
+backoff.
+
 ### 6.3 Reconnect
 
-On socket loss:
+On socket loss (status flips to `reconnecting` as soon as the reader
+ends, before the first backoff wait):
 
 - Backoff: 1s → 30s cap, multiplier 1.5, jitter ±20%, indefinite.
 - Banner: `"reconnecting (attempt N, next in Ms)…"`.
@@ -171,7 +175,9 @@ On socket loss:
 ### 6.4 Liveness
 
 Send `ping` every 15s while idle (no inbound for ≥10s). Round-trip
-shown in debug pane (`Ctrl+D`); not in main UI.
+shown in debug pane (`Ctrl+D`); not in main UI. No `pong` within 10s →
+abort the socket and reconnect (catches half-open links, e.g. an
+SSH-forwarded socket whose far end vanished).
 
 ### 6.5 Fatal protocol mismatch
 

@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from blemees_tui.connection import Connection, FatalProtocolError
+from blemees_tui.connection import Connection, FatalProtocolError, _BackoffPolicy
 
 HELLO_ACK = {
     "type": "hello_ack",
@@ -423,6 +423,218 @@ async def test_undecodable_frame_reconnects_instead_of_killing_supervisor(short_
             await asyncio.sleep(0.02)
         assert hellos >= 2
         assert conn.status.state == "connected"
+    finally:
+        await conn.stop()
+        server.close()
+        await server.wait_closed()
+
+
+# ---------------------------------------------------------------------------
+# Connection hardening (#20)
+# ---------------------------------------------------------------------------
+
+
+def _fast_backoff(conn: Connection) -> None:
+    conn._policy = _BackoffPolicy(initial=0.05, cap=0.05, jitter=0.0)
+
+
+async def _scripted_daemon(socket_path: Path, *, ack_hello=True, answer_pings=True):
+    """Daemon double: counts hellos; optionally stays silent on hello/ping."""
+    seen: dict[str, int] = {"hello": 0, "ping": 0}
+    received: list[dict] = []
+
+    async def handle(reader, writer):
+        try:
+            while True:
+                line = await reader.readuntil(b"\n")
+                frame = json.loads(line.decode("utf-8"))
+                received.append(frame)
+                t = frame.get("type")
+                if t in seen:
+                    seen[t] += 1
+                if t == "hello" and ack_hello:
+                    _writeln(writer, HELLO_ACK)
+                elif t == "ping" and answer_pings:
+                    _writeln(writer, {"type": "pong", "id": frame.get("id")})
+                await writer.drain()
+        except (asyncio.IncompleteReadError, ConnectionError):
+            pass
+        finally:
+            writer.close()
+            with contextlib.suppress(OSError, ConnectionError):
+                await writer.wait_closed()
+
+    server = await _serve(socket_path, handle)
+    return server, seen, received
+
+
+async def _until(pred, *, tries=200, step=0.02) -> bool:
+    for _ in range(tries):
+        if pred():
+            return True
+        await asyncio.sleep(step)
+    return pred()
+
+
+@pytest.mark.asyncio
+async def test_silent_hello_times_out_and_retries(short_tmpdir):
+    # A daemon that accepts but never answers hello used to hang the
+    # supervisor forever with no retry.
+    server, seen, _ = await _scripted_daemon(short_tmpdir / "h.sock", ack_hello=False)
+    errors: list[str] = []
+    conn = Connection(
+        socket_path=str(short_tmpdir / "h.sock"),
+        handshake_timeout=0.1,
+        on_status_change=lambda s: errors.append(s.last_error),
+    )
+    _fast_backoff(conn)
+    await conn.start()
+    try:
+        assert await _until(lambda: seen["hello"] >= 2)
+        assert any("hello_ack" in e for e in errors)
+        assert conn.status.state != "connected"
+    finally:
+        await conn.stop()
+        server.close()
+        await server.wait_closed()
+
+
+@pytest.mark.asyncio
+async def test_missing_pong_forces_reconnect(short_tmpdir):
+    # Half-open link: hello works, then nothing comes back. The pong
+    # deadline must tear the link down and reconnect.
+    server, seen, _ = await _scripted_daemon(short_tmpdir / "p.sock", answer_pings=False)
+    errors: list[str] = []
+    conn = Connection(
+        socket_path=str(short_tmpdir / "p.sock"),
+        ping_interval=0.05,
+        idle_threshold=0.0,
+        pong_timeout=0.1,
+        on_status_change=lambda s: errors.append(s.last_error),
+    )
+    _fast_backoff(conn)
+    await conn.start()
+    try:
+        assert await _until(lambda: seen["hello"] >= 2)
+        assert any("pong" in e for e in errors)
+    finally:
+        await conn.stop()
+        server.close()
+        await server.wait_closed()
+
+
+@pytest.mark.asyncio
+async def test_answered_pings_keep_the_link(short_tmpdir):
+    server, seen, received = await _scripted_daemon(short_tmpdir / "k.sock")
+    conn = Connection(
+        socket_path=str(short_tmpdir / "k.sock"),
+        ping_interval=0.05,
+        idle_threshold=0.0,
+        pong_timeout=0.2,
+    )
+    _fast_backoff(conn)
+    await conn.start()
+    try:
+        assert await _until(lambda: seen["ping"] >= 3)
+        assert seen["hello"] == 1
+        assert conn.status.state == "connected"
+        # Pings carry an id so the pong can be correlated.
+        assert all(f.get("id") for f in received if f.get("type") == "ping")
+    finally:
+        await conn.stop()
+        server.close()
+        await server.wait_closed()
+
+
+@pytest.mark.asyncio
+async def test_status_flips_to_reconnecting_as_soon_as_reader_ends(short_tmpdir):
+    # After a clean EOF the first backoff window used to run with the
+    # status still "connected".
+    socket_path = short_tmpdir / "e.sock"
+    hangup = asyncio.Event()
+
+    async def handle(reader, writer):
+        await reader.readuntil(b"\n")
+        _writeln(writer, HELLO_ACK)
+        await writer.drain()
+        await hangup.wait()
+        writer.close()
+
+    server = await _serve(socket_path, handle)
+    conn = Connection(socket_path=str(socket_path))
+    # Long backoff: any "reconnecting" we observe must come from the
+    # reader-end path, not from the next loop iteration.
+    conn._policy = _BackoffPolicy(initial=30.0, cap=30.0, jitter=0.0)
+    await conn.start()
+    try:
+        assert await _until(lambda: conn.status.state == "connected")
+        hangup.set()
+        assert await _until(lambda: conn.status.state == "reconnecting", tries=25)
+        assert conn.status.next_in_ms > 0
+    finally:
+        await conn.stop()
+        server.close()
+        await server.wait_closed()
+
+
+@pytest.mark.asyncio
+async def test_link_death_during_restore_keeps_session_tracked(short_tmpdir):
+    # The daemon goes silent while a tracked session is being resumed. The
+    # pong deadline fails the in-flight open; that is a dead link, not a
+    # session_unknown, so the session must stay tracked for the next try.
+    server, seen, _ = await _scripted_daemon(short_tmpdir / "r.sock", answer_pings=False)
+    conn = Connection(
+        socket_path=str(short_tmpdir / "r.sock"),
+        ping_interval=0.05,
+        idle_threshold=0.0,
+        pong_timeout=0.1,
+    )
+    _fast_backoff(conn)
+    conn.track_owned("sid_r", agent="claude", last_seen_seq=3)
+    await conn.start()
+    try:
+        assert await _until(lambda: seen["hello"] >= 2)
+        assert "sid_r" in conn._tracked
+    finally:
+        await conn.stop()
+        server.close()
+        await server.wait_closed()
+
+
+@pytest.mark.asyncio
+async def test_eof_during_restore_does_not_hang_or_untrack(short_tmpdir):
+    # The daemon hangs up while a resume is in flight. The open must fail
+    # as a lost link (session stays tracked) and the supervisor must retry.
+    socket_path = short_tmpdir / "x.sock"
+    hellos = 0
+
+    async def handle(reader, writer):
+        nonlocal hellos
+        try:
+            while True:
+                line = await reader.readuntil(b"\n")
+                frame = json.loads(line.decode("utf-8"))
+                if frame.get("type") == "hello":
+                    hellos += 1
+                    _writeln(writer, HELLO_ACK)
+                    await writer.drain()
+                elif frame.get("type") == "session.open":
+                    break
+        except asyncio.IncompleteReadError:
+            pass
+        finally:
+            writer.close()
+            with contextlib.suppress(OSError, ConnectionError):
+                await writer.wait_closed()
+
+    server = await _serve(socket_path, handle)
+    conn = Connection(socket_path=str(socket_path))
+    _fast_backoff(conn)
+    conn.track_owned("sid_e", agent="claude")
+    await conn.start()
+    try:
+        assert await _until(lambda: hellos >= 2)
+        assert "sid_e" in conn._tracked
     finally:
         await conn.stop()
         server.close()

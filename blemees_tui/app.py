@@ -156,6 +156,9 @@ class BlemeesTuiApp(App):
         # without a saved reference can be garbage-collected mid-execution.
         self._reconcile_task: asyncio.Task | None = None
         self._reconnect_flush_task: asyncio.Task | None = None
+        # Fire-and-forget tasks (pending-send flush, roster/info fetches) —
+        # held for the same reason until they finish (#20).
+        self._background_tasks: set[asyncio.Task] = set()
         self._socket_override = socket_override
         self._show_thinking: bool = self.config_obj.ui.show_thinking
         # Set when a frame-driven UI refresh is already pending — coalesces
@@ -317,7 +320,7 @@ class BlemeesTuiApp(App):
                     save_snapshot(sess)
                     if sess is not None and sess.pending_sends:
                         # Flush any locally-queued user messages.
-                        asyncio.create_task(self._flush_pending_sends(sid))
+                        self._spawn(self._flush_pending_sends(sid))
                 if ftype == "session.closed_notice":
                     self._connection and self._connection.untrack(sid)
                     self.state.sessions.pop(sid, None)
@@ -424,7 +427,13 @@ class BlemeesTuiApp(App):
             self.state.daemon.agent_roster = roster
             self._refresh_ui()
 
-        asyncio.create_task(_fetch())
+        self._spawn(_fetch())
+
+    def _spawn(self, coro) -> asyncio.Task:
+        task = asyncio.create_task(coro)
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
+        return task
 
     def _schedule_session_info(self, session_id: str) -> None:
         if self._connection is None:
@@ -438,7 +447,7 @@ class BlemeesTuiApp(App):
                 # Connection layer logs; nothing actionable here.
                 return
 
-        asyncio.create_task(_ask())
+        self._spawn(_ask())
 
     def _latch_connection_fatal(self, code: str, message: str) -> None:
         text = {
@@ -1327,7 +1336,7 @@ class BlemeesTuiApp(App):
             turn = sess.turns[-1]
         try:
             await self._connection.send_user(sid, text)
-        except ConnectionError_ as exc:
+        except (ConnectionError_, OSError) as exc:
             # Daemon unreachable mid-send — undo the optimistic turn and
             # re-queue at the FRONT (keeps flush order) instead of crashing
             # the handler (#15, reproduced).
@@ -1357,8 +1366,15 @@ class BlemeesTuiApp(App):
             return
         # Pop the first queued message and fire it; subsequent ones flush
         # on each successive agent.result.
+        # A failed send re-queues inside _send_user_message.
         text = sess.pending_sends.pop(0)
-        await self._send_user_message(sid, text)
+        try:
+            await self._send_user_message(sid, text)
+        except asyncio.CancelledError:
+            # A newer reconnect flush replaced this one mid-send — put the
+            # message back rather than drop it (#20).
+            sess.pending_sends.insert(0, text)
+            raise
 
     async def _dispatch_command(self, cmd) -> None:
         if cmd.name == "new":
