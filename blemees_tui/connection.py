@@ -10,7 +10,9 @@ Responsibilities:
 * One Unix-socket connection at a time.
 * Reconnect with backoff (1s → 30s, ×1.5, ±20%, indefinite).
 * Liveness ``ping`` every 15s while idle; no ``pong`` within 10s forces a
-  reconnect (catches half-open sockets, e.g. SSH-forwarded ones).
+  reconnect (catches half-open sockets, e.g. SSH-forwarded ones). A ping
+  queued behind a slow request (the daemon dispatches serially) waits up to
+  120s for that request instead.
 * ``hello`` handshake bounded by a timeout so a wedged daemon can't hang
   the supervisor.
 * Central event-log feed for the TUI's observability surfaces.
@@ -140,6 +142,7 @@ class Connection:
         ping_interval: float = 15.0,
         idle_threshold: float = 10.0,
         pong_timeout: float = 10.0,
+        request_timeout: float = 120.0,
         handshake_timeout: float = 10.0,
     ) -> None:
         self.socket_path = socket_path or default_socket_path()
@@ -148,6 +151,7 @@ class Connection:
         self._ping_interval = ping_interval
         self._idle_threshold = idle_threshold
         self._pong_timeout = pong_timeout
+        self._request_timeout = request_timeout
         self._handshake_timeout = handshake_timeout
 
         self._reader: asyncio.StreamReader | None = None
@@ -604,19 +608,52 @@ class Connection:
             # Half-open sockets (e.g. an SSH-forwarded socket whose far end
             # vanished) never error on their own — only a missing pong shows
             # the link is dead (#20).
+            busy = {p.fut for p in self._pending.values() if not p.fut.done()}
+            ping = asyncio.create_task(self._request({"type": "ping"}, ack_types=("pong",)))
             try:
-                await asyncio.wait_for(
-                    self._request({"type": "ping"}, ack_types=("pong",)),
-                    timeout=self._pong_timeout,
-                )
-            except TimeoutError:
-                self._abort_link(f"no pong within {self._pong_timeout:g}s")
+                reason = await self._await_pong(ping, busy)
+            finally:
+                if not ping.done():
+                    await _cancel_and_wait(ping)
+            if reason is not None:
+                self._abort_link(reason)
+                await asyncio.gather(ping, return_exceptions=True)
                 return
+            try:
+                ping.result()
             except (OSError, ConnectionLost):
                 return
             except ConnectionError_:
                 # An error reply still proves the daemon is there.
                 continue
+
+    async def _await_pong(self, ping: asyncio.Task[Any], busy: set[asyncio.Future]) -> str | None:
+        """Wait for ``ping`` to finish; return why the link is dead, or None.
+
+        The daemon reads one frame at a time and awaits each request before
+        the next (a ``session.open`` waits for its backend to start), so a
+        ping sent behind a slow request can't be answered until that request
+        is. While a request sent before the ping is still pending, the
+        deadline is ``request_timeout``; once all of them are answered, the
+        pong gets a fresh ``pong_timeout``.
+        """
+        start = time.monotonic()
+        deadline = start + (self._request_timeout if busy else self._pong_timeout)
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                if busy:
+                    return f"no reply to a pending request within {self._request_timeout:g}s"
+                return f"no pong within {self._pong_timeout:g}s"
+            done, _ = await asyncio.wait(
+                {ping, *busy}, timeout=remaining, return_when=asyncio.FIRST_COMPLETED
+            )
+            if ping in done:
+                return None
+            if done:
+                busy -= done
+                if not busy:
+                    deadline = time.monotonic() + self._pong_timeout
 
     # ------------------------------------------------------------------
     # Status notifications

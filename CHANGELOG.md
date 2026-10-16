@@ -63,11 +63,14 @@ project tracks [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Connection hardening (#20).** A daemon that accepts but never answers
   `hello` no longer hangs the TUI — the handshake times out after 10s and
   reconnects. A missing `pong` (10s deadline) now forces a reconnect, so
-  half-open sockets (SSH-forwarded) are detected. The footer shows
+  half-open sockets (SSH-forwarded) are detected. A ping queued behind a
+  slow request (e.g. a backend starting for `session.open`) waits up to
+  120s for that request instead, so a busy daemon is not mistaken for a
+  dead link. The footer shows
   "reconnecting" as soon as the socket closes, not after the first backoff
   wait. A queued message whose send fails with a socket error (or whose
   flush is cancelled mid-send) goes back on the queue instead of being
-  dropped.
+  dropped, and its optimistic turn is undone so the next flush sends it.
 - Tool calls now appear in Claude Code sessions (extracted from
   `agent.message.content` rather than relying on suppressed
   `agent.tool_use` frames).

@@ -582,12 +582,17 @@ async def test_link_death_during_restore_keeps_session_tracked(short_tmpdir):
     # The daemon goes silent while a tracked session is being resumed. The
     # pong deadline fails the in-flight open; that is a dead link, not a
     # session_unknown, so the session must stay tracked for the next try.
+    # The open is still pending when the ping goes out, so the bound is
+    # request_timeout, not pong_timeout.
     server, seen, _ = await _scripted_daemon(short_tmpdir / "r.sock", answer_pings=False)
+    errors: list[str] = []
     conn = Connection(
         socket_path=str(short_tmpdir / "r.sock"),
         ping_interval=0.05,
         idle_threshold=0.0,
         pong_timeout=0.1,
+        request_timeout=0.3,
+        on_status_change=lambda s: errors.append(s.last_error),
     )
     _fast_backoff(conn)
     conn.track_owned("sid_r", agent="claude", last_seen_seq=3)
@@ -595,6 +600,7 @@ async def test_link_death_during_restore_keeps_session_tracked(short_tmpdir):
     try:
         assert await _until(lambda: seen["hello"] >= 2)
         assert "sid_r" in conn._tracked
+        assert any("pending request within 0.3s" in e for e in errors)
     finally:
         await conn.stop()
         server.close()
@@ -636,6 +642,73 @@ async def test_eof_during_restore_does_not_hang_or_untrack(short_tmpdir):
     try:
         assert await _until(lambda: hellos >= 2)
         assert "sid_e" in conn._tracked
+    finally:
+        await conn.stop()
+        server.close()
+        await server.wait_closed()
+
+
+async def _serial_daemon(socket_path: Path, *, open_delay: float):
+    """Daemon double that, like blemees-agentd, finishes each request before
+    it reads the next frame — a ping sent during a slow open waits behind it."""
+    seen: dict[str, int] = {"hello": 0, "ping": 0}
+
+    async def handle(reader, writer):
+        try:
+            while True:
+                line = await reader.readuntil(b"\n")
+                frame = json.loads(line.decode("utf-8"))
+                t = frame.get("type")
+                if t in seen:
+                    seen[t] += 1
+                if t == "hello":
+                    _writeln(writer, HELLO_ACK)
+                elif t == "ping":
+                    _writeln(writer, {"type": "pong", "id": frame.get("id")})
+                elif t == "session.open":
+                    await asyncio.sleep(open_delay)
+                    _writeln(
+                        writer,
+                        {
+                            "type": "session.opened",
+                            "id": frame.get("id"),
+                            "session_id": frame.get("session_id"),
+                        },
+                    )
+                await writer.drain()
+        except (asyncio.IncompleteReadError, ConnectionError):
+            pass
+        finally:
+            writer.close()
+            with contextlib.suppress(OSError, ConnectionError):
+                await writer.wait_closed()
+
+    server = await _serve(socket_path, handle)
+    return server, seen
+
+
+@pytest.mark.asyncio
+async def test_slow_open_does_not_trip_the_pong_deadline(short_tmpdir):
+    # A backend that takes longer than pong_timeout to start keeps the
+    # daemon from reading the ping. That is a busy daemon, not a dead link:
+    # the open must succeed on the same connection.
+    server, seen = await _serial_daemon(short_tmpdir / "s.sock", open_delay=0.5)
+    conn = Connection(
+        socket_path=str(short_tmpdir / "s.sock"),
+        ping_interval=0.05,
+        idle_threshold=0.0,
+        pong_timeout=0.1,
+        request_timeout=2.0,
+    )
+    _fast_backoff(conn)
+    await conn.start()
+    try:
+        assert await _until(lambda: conn.status.state == "connected")
+        reply = await asyncio.wait_for(conn.open_session("sid_s", agent="claude"), timeout=3.0)
+        assert reply["type"] == "session.opened"
+        assert seen["ping"] >= 1
+        assert seen["hello"] == 1
+        assert conn.status.state == "connected"
     finally:
         await conn.stop()
         server.close()
