@@ -1316,13 +1316,26 @@ class BlemeesTuiApp(App):
     async def _send_user_message(self, sid: str, text: str) -> None:
         if self._connection is None:
             return
+        # blemees/3 agents don't echo the user turn back, so record it locally
+        # — *before* sending: a fast agent's reply can be reduced while the
+        # write is still draining, and recording after it would open a second
+        # turn that never ends (#13, caught by the e2e smoke).
+        sess = self.state.sessions.get(sid)
+        prior_title = sess.title if sess is not None else ""
+        if sess is not None:
+            record_user_prompt(sess, text)
+            turn = sess.turns[-1]
         try:
             await self._connection.send_user(sid, text)
         except ConnectionError_ as exc:
-            # Daemon unreachable mid-send — re-queue at the FRONT (keeps
-            # flush order) instead of crashing the handler (#15, reproduced).
-            sess = self.state.sessions.get(sid)
+            # Daemon unreachable mid-send — undo the optimistic turn and
+            # re-queue at the FRONT (keeps flush order) instead of crashing
+            # the handler (#15, reproduced).
             if sess is not None:
+                if turn in sess.turns:
+                    sess.turns.remove(turn)
+                sess.turn_active = False
+                sess.title = prior_title
                 sess.pending_sends.insert(0, text)
             self.state.event_log.append(
                 EventLogSource.CONNECTION, "send_queued", str(exc), session_id=sid
@@ -1330,10 +1343,7 @@ class BlemeesTuiApp(App):
             self.notify("Daemon unreachable — message queued.", severity="warning")
             self._refresh_ui()
             return
-        # blemees/3 agents don't echo the user turn back, so record it locally.
-        sess = self.state.sessions.get(sid)
         if sess is not None:
-            record_user_prompt(sess, text)
             self._refresh_ui()
 
     async def _flush_all_pending(self) -> None:

@@ -37,6 +37,7 @@ nav:
   - Spec: SPEC.md
   - Implementation plan: IMPLEMENTATION.md
   - Parity backlog: PARITY_BACKLOG.md
+  - End-to-end smoke: SMOKE.md
 
 markdown_extensions:
   - admonition

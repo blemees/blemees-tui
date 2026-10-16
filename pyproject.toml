@@ -65,6 +65,9 @@ include = ["blemees_tui*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+markers = [
+    "e2e: real-daemon smoke (opt-in via BLEMEES_E2E=1; see tests/test_e2e_smoke.py)",
+]
 
 [tool.ruff]
 line-length = 100
