@@ -621,6 +621,7 @@ async def test_eof_during_restore_does_not_hang_or_untrack(short_tmpdir):
                 elif frame.get("type") == "session.open":
                     break
         except asyncio.IncompleteReadError:
+            # The client hung up first; nothing to do but close our side.
             pass
         finally:
             writer.close()

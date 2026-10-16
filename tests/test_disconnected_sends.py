@@ -186,8 +186,8 @@ async def test_cancelled_flush_requeues_message(isolated_state_dir, monkeypatch)
         await started.wait()
         assert sess.pending_sends == ["second"]
         task.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await task
+        await asyncio.wait([task])
+        assert task.cancelled()
         await pilot.pause()
         assert sess.pending_sends == ["first", "second"]
 

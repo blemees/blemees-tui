@@ -23,7 +23,6 @@ via the ``on_frame`` callback the app registers.
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import json
 import logging
 import os
@@ -49,6 +48,17 @@ MAX_FRAME_BYTES = 16 * 1024 * 1024
 # ---------------------------------------------------------------------------
 # Socket resolution (mirrors blemees.client.default_socket_path)
 # ---------------------------------------------------------------------------
+
+
+async def _cancel_and_wait(task: asyncio.Task[Any]) -> None:
+    """Cancel ``task`` and wait for it to finish.
+
+    The task's own result or exception is discarded, but a cancel of the
+    *calling* task still propagates (``suppress(BaseException)`` would
+    swallow it).
+    """
+    task.cancel()
+    await asyncio.gather(task, return_exceptions=True)
 
 
 def default_socket_path() -> str:
@@ -180,9 +190,7 @@ class Connection:
         self._stop.set()
         for task in (self._supervisor_task, self._reader_task, self._ping_task):
             if task is not None:
-                task.cancel()
-                with contextlib.suppress(BaseException):
-                    await task
+                await _cancel_and_wait(task)
         self._supervisor_task = None
         self._reader_task = None
         self._ping_task = None
@@ -500,14 +508,10 @@ class Connection:
 
     async def _teardown_writer(self) -> None:
         if self._ping_task is not None:
-            self._ping_task.cancel()
-            with contextlib.suppress(BaseException):
-                await self._ping_task
+            await _cancel_and_wait(self._ping_task)
             self._ping_task = None
         if self._reader_task is not None and not self._reader_task.done():
-            self._reader_task.cancel()
-            with contextlib.suppress(BaseException):
-                await self._reader_task
+            await _cancel_and_wait(self._reader_task)
         self._fail_pending("connection lost")
         if self._writer is not None:
             try:
