@@ -82,10 +82,14 @@ class _Host(App):
 
 async def _profiles():
     return [
-        {"name": "blemees", "source": "config", "agents": [
-            {"name": "developer", "model": "opus"},
-            {"name": "architect", "model": None},
-        ]},
+        {
+            "name": "blemees",
+            "source": "config",
+            "agents": [
+                {"name": "developer", "model": "opus"},
+                {"name": "architect", "model": None},
+            ],
+        },
         {"name": "other", "agents": [{"name": "x"}]},
     ]
 
@@ -127,6 +131,7 @@ async def test_modal_adopts_first_profile_when_launch_profile_blank():
 
 
 # --- build_profile_spec: agent_name + env (agent_editor) ------------------
+
 
 def test_agent_name_nests_under_agents_map():
     spec = build_profile_spec(agent_name="developer", agent_command="claude-agent-acp")

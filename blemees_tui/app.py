@@ -1062,7 +1062,9 @@ class BlemeesTuiApp(App):
         self.notify(f"Profile {msg.name!r} saved.")
         self._refresh_ui()
 
-    async def on_agent_editor_modal_delete_profile(self, msg: AgentEditorModal.DeleteProfile) -> None:
+    async def on_agent_editor_modal_delete_profile(
+        self, msg: AgentEditorModal.DeleteProfile
+    ) -> None:
         if self._connection is None:
             return
         try:
