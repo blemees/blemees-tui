@@ -9,7 +9,12 @@ Responsibilities:
 
 * One Unix-socket connection at a time.
 * Reconnect with backoff (1s → 30s, ×1.5, ±20%, indefinite).
-* Liveness ``ping`` every 15s while idle.
+* Liveness ``ping`` every 15s while idle; no ``pong`` within 10s forces a
+  reconnect (catches half-open sockets, e.g. SSH-forwarded ones). A ping
+  queued behind a slow request (the daemon dispatches serially) waits up to
+  120s for that request instead.
+* ``hello`` handshake bounded by a timeout so a wedged daemon can't hang
+  the supervisor.
 * Central event-log feed for the TUI's observability surfaces.
 
 Frame dispatch follows the reducer's contract: this module forwards every
@@ -20,7 +25,6 @@ via the ``on_frame`` callback the app registers.
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import json
 import logging
 import os
@@ -48,6 +52,17 @@ MAX_FRAME_BYTES = 16 * 1024 * 1024
 # ---------------------------------------------------------------------------
 
 
+async def _cancel_and_wait(task: asyncio.Task[Any]) -> None:
+    """Cancel ``task`` and wait for it to finish.
+
+    The task's own result or exception is discarded, but a cancel of the
+    *calling* task still propagates (``suppress(BaseException)`` would
+    swallow it).
+    """
+    task.cancel()
+    await asyncio.gather(task, return_exceptions=True)
+
+
 def default_socket_path() -> str:
     env = os.environ.get("BLEMEES_AGENTD_SOCKET")
     if env:
@@ -67,6 +82,10 @@ class ConnectionError_(RuntimeError):
     """Raised when a frame indicates the connection is unusable."""
 
 
+class ConnectionLost(ConnectionError_):
+    """The link died while a request was in flight — not a daemon reply."""
+
+
 class FatalProtocolError(RuntimeError):
     """``protocol_mismatch`` from the daemon — caller should exit."""
 
@@ -83,6 +102,8 @@ FrameHandler = Callable[[dict[str, Any]], Awaitable[None] | None]
 class _PendingRequest:
     fut: asyncio.Future
     types: tuple[str, ...]
+    # Set once the frame is in the transport buffer, i.e. has a wire position.
+    written: bool = False
 
 
 @dataclass
@@ -122,12 +143,18 @@ class Connection:
         on_status_change: Callable[[ConnectionStatus], None] | None = None,
         ping_interval: float = 15.0,
         idle_threshold: float = 10.0,
+        pong_timeout: float = 10.0,
+        request_timeout: float = 120.0,
+        handshake_timeout: float = 10.0,
     ) -> None:
         self.socket_path = socket_path or default_socket_path()
         self._on_frame = on_frame
         self._on_status_change = on_status_change
         self._ping_interval = ping_interval
         self._idle_threshold = idle_threshold
+        self._pong_timeout = pong_timeout
+        self._request_timeout = request_timeout
+        self._handshake_timeout = handshake_timeout
 
         self._reader: asyncio.StreamReader | None = None
         self._writer: asyncio.StreamWriter | None = None
@@ -140,6 +167,9 @@ class Connection:
         self._next_req = 0
         self._pending: dict[str, _PendingRequest] = {}
         self._last_inbound_at = time.monotonic()
+        # Why the ping loop killed the link, if it did — reported as the
+        # supervisor's reconnect reason.
+        self._link_error = ""
 
         self.status = ConnectionStatus()
         self.daemon_info: dict[str, Any] = {}
@@ -166,9 +196,7 @@ class Connection:
         self._stop.set()
         for task in (self._supervisor_task, self._reader_task, self._ping_task):
             if task is not None:
-                task.cancel()
-                with contextlib.suppress(BaseException):
-                    await task
+                await _cancel_and_wait(task)
         self._supervisor_task = None
         self._reader_task = None
         self._ping_task = None
@@ -350,16 +378,21 @@ class Connection:
     # ------------------------------------------------------------------
 
     async def _request(
-        self, frame: dict[str, Any], *, ack_types: tuple[str, ...]
+        self,
+        frame: dict[str, Any],
+        *,
+        ack_types: tuple[str, ...],
+        before_write: Callable[[], None] | None = None,
     ) -> dict[str, Any]:
         self._next_req += 1
         req_id = f"req_{self._next_req}"
         frame = {**frame, "id": req_id}
         loop = asyncio.get_running_loop()
         fut: asyncio.Future = loop.create_future()
-        self._pending[req_id] = _PendingRequest(fut=fut, types=ack_types)
+        pending = _PendingRequest(fut=fut, types=ack_types)
+        self._pending[req_id] = pending
         try:
-            await self._send(frame)
+            await self._send(frame, pending=pending, before_write=before_write)
             reply = await fut
         finally:
             self._pending.pop(req_id, None)
@@ -367,12 +400,24 @@ class Connection:
             raise ConnectionError_(f"{reply.get('code', '')}: {reply.get('message', '')}")
         return reply
 
-    async def _send(self, frame: dict[str, Any]) -> None:
+    async def _send(
+        self,
+        frame: dict[str, Any],
+        *,
+        pending: _PendingRequest | None = None,
+        before_write: Callable[[], None] | None = None,
+    ) -> None:
         if self._writer is None:
             raise ConnectionError_("not connected")
         data = (json.dumps(frame, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
         async with self._write_lock:
+            # No await between the hook, write() and the flag, so what the
+            # hook sees as written is exactly what is ahead on the wire.
+            if before_write is not None:
+                before_write()
             self._writer.write(data)
+            if pending is not None:
+                pending.written = True
             await self._writer.drain()
 
     # ------------------------------------------------------------------
@@ -391,6 +436,9 @@ class Connection:
                 # Reader runs until socket dies; await it to know when to retry.
                 if self._reader_task is not None:
                     await self._reader_task
+                # Flip the status now via the except branch below — otherwise
+                # the first backoff window runs still claiming "connected" (#20).
+                raise ConnectionError_(self._link_error or "connection closed")
             except FatalProtocolError as exc:
                 self._set_status("fatal", error=str(exc))
                 logger.error("fatal protocol error: %s", exc)
@@ -419,17 +467,13 @@ class Connection:
                 continue
 
     async def _connect_once(self) -> None:
-        reader, writer = await asyncio.open_unix_connection(self.socket_path, limit=MAX_FRAME_BYTES)
-        self._reader = reader
-        self._writer = writer
-        await self._send(
-            {
-                "type": "hello",
-                "client": CLIENT_NAME,
-                "protocol": PROTOCOL_VERSION,
-            }
-        )
-        ack = await self._read_one()
+        self._link_error = ""
+        # A daemon that accepts but never answers hello used to hang the
+        # supervisor forever with no retry (#20).
+        try:
+            ack = await asyncio.wait_for(self._handshake(), timeout=self._handshake_timeout)
+        except TimeoutError as exc:
+            raise ConnectionError_(f"no hello_ack within {self._handshake_timeout:g}s") from exc
         if ack.get("type") != "hello_ack":
             if ack.get("code") == "protocol_mismatch":
                 raise FatalProtocolError(ack.get("message", "protocol mismatch"))
@@ -442,6 +486,19 @@ class Connection:
         self._reader_task = asyncio.create_task(self._reader_loop(), name="blemees-reader")
         self._ping_task = asyncio.create_task(self._ping_loop(), name="blemees-ping")
         self._last_inbound_at = time.monotonic()
+
+    async def _handshake(self) -> dict[str, Any]:
+        reader, writer = await asyncio.open_unix_connection(self.socket_path, limit=MAX_FRAME_BYTES)
+        self._reader = reader
+        self._writer = writer
+        await self._send(
+            {
+                "type": "hello",
+                "client": CLIENT_NAME,
+                "protocol": PROTOCOL_VERSION,
+            }
+        )
+        return await self._read_one()
 
     async def _restore_tracked(self) -> None:
         """Re-issue ``open … resume:true`` / ``watch`` for tracked sessions."""
@@ -462,6 +519,10 @@ class Connection:
                         as_role="viewer",
                         last_seen_seq=entry.get("last_seen_seq", 0),
                     )
+            except ConnectionLost:
+                # The link died, not the session — keep it tracked for the
+                # next reconnect.
+                raise
             except ConnectionError_ as exc:
                 # session_unknown → caller will see this via the on_frame
                 # error stream too; we drop it from tracked here.
@@ -470,14 +531,11 @@ class Connection:
 
     async def _teardown_writer(self) -> None:
         if self._ping_task is not None:
-            self._ping_task.cancel()
-            with contextlib.suppress(BaseException):
-                await self._ping_task
+            await _cancel_and_wait(self._ping_task)
             self._ping_task = None
-        for pending in self._pending.values():
-            if not pending.fut.done():
-                pending.fut.set_exception(ConnectionError_("connection lost"))
-        self._pending.clear()
+        if self._reader_task is not None and not self._reader_task.done():
+            await _cancel_and_wait(self._reader_task)
+        self._fail_pending("connection lost")
         if self._writer is not None:
             try:
                 self._writer.close()
@@ -486,6 +544,25 @@ class Connection:
                 pass
             self._writer = None
         self._reader = None
+
+    def _fail_pending(self, reason: str) -> None:
+        for pending in self._pending.values():
+            if not pending.fut.done():
+                pending.fut.set_exception(ConnectionLost(reason))
+        self._pending.clear()
+
+    def _abort_link(self, reason: str) -> None:
+        """Kill a link that looks open but isn't answering.
+
+        Aborting the transport makes the reader see EOF, which hands control
+        back to the supervisor; in-flight requests fail now instead of
+        waiting on replies that will never come.
+        """
+        logger.warning("connection: %s — forcing reconnect", reason)
+        self._link_error = reason
+        self._fail_pending(reason)
+        if self._writer is not None:
+            self._writer.transport.abort()
 
     # ------------------------------------------------------------------
     # Reader / ping
@@ -511,6 +588,10 @@ class Connection:
             # of sitting out the backoff still claiming "connected" (#14).
             logger.warning("reader loop: bad frame (%s) — reconnecting", exc)
             raise ConnectionError_(f"bad frame: {exc}") from exc
+        finally:
+            # Nothing can answer in-flight requests once the reader stops —
+            # fail them now so a resume mid-restore doesn't wait forever.
+            self._fail_pending("connection closed")
 
     async def _dispatch(self, frame: dict[str, Any]) -> None:
         ftype = frame.get("type", "")
@@ -543,10 +624,77 @@ class Connection:
             idle = time.monotonic() - self._last_inbound_at
             if idle < self._idle_threshold:
                 continue
+            # Half-open sockets (e.g. an SSH-forwarded socket whose far end
+            # vanished) never error on their own — only a missing pong shows
+            # the link is dead (#20).
+            ahead: asyncio.Future[set[asyncio.Future]] = asyncio.get_running_loop().create_future()
+
+            def snapshot_ahead(ahead: asyncio.Future = ahead) -> None:
+                if not ahead.done():
+                    ahead.set_result(
+                        {p.fut for p in self._pending.values() if p.written and not p.fut.done()}
+                    )
+
+            ping = asyncio.create_task(
+                self._request({"type": "ping"}, ack_types=("pong",), before_write=snapshot_ahead)
+            )
             try:
-                await self._send({"type": "ping"})
-            except (OSError, ConnectionError_):
+                reason = await self._await_pong(ping, ahead)
+            finally:
+                if not ping.done():
+                    await _cancel_and_wait(ping)
+            if reason is not None:
+                self._abort_link(reason)
+                await asyncio.gather(ping, return_exceptions=True)
                 return
+            try:
+                ping.result()
+            except (OSError, ConnectionLost):
+                return
+            except ConnectionError_:
+                # An error reply still proves the daemon is there.
+                continue
+
+    async def _await_pong(
+        self, ping: asyncio.Task[Any], ahead: asyncio.Future[set[asyncio.Future]]
+    ) -> str | None:
+        """Wait for ``ping`` to finish; return why the link is dead, or None.
+
+        The daemon reads one frame at a time and awaits each request before
+        the next (a ``session.open`` waits for its backend to start), so a
+        ping written behind a slow request can't be answered until that
+        request is. ``ahead`` resolves, as the ping is written, to the
+        requests already on the wire before it. While one of them is still
+        pending, the deadline is ``request_timeout``; once all of them are
+        answered, the pong gets a fresh ``pong_timeout``.
+        """
+        # Until the ping is written, anything pending may be ahead of it.
+        pending = any(not p.fut.done() for p in self._pending.values())
+        wait = self._request_timeout if pending else self._pong_timeout
+        done, _ = await asyncio.wait(
+            {ping, ahead}, timeout=wait, return_when=asyncio.FIRST_COMPLETED
+        )
+        if ping in done:
+            return None
+        if not done:
+            return f"ping not written within {wait:g}s"
+        busy = set(ahead.result())
+        deadline = time.monotonic() + (self._request_timeout if busy else self._pong_timeout)
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                if busy:
+                    return f"no reply to a pending request within {self._request_timeout:g}s"
+                return f"no pong within {self._pong_timeout:g}s"
+            done, _ = await asyncio.wait(
+                {ping, *busy}, timeout=remaining, return_when=asyncio.FIRST_COMPLETED
+            )
+            if ping in done:
+                return None
+            if done:
+                busy -= done
+                if not busy:
+                    deadline = time.monotonic() + self._pong_timeout
 
     # ------------------------------------------------------------------
     # Status notifications
