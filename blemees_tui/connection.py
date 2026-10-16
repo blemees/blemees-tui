@@ -102,6 +102,8 @@ FrameHandler = Callable[[dict[str, Any]], Awaitable[None] | None]
 class _PendingRequest:
     fut: asyncio.Future
     types: tuple[str, ...]
+    # Set once the frame is in the transport buffer, i.e. has a wire position.
+    written: bool = False
 
 
 @dataclass
@@ -376,16 +378,21 @@ class Connection:
     # ------------------------------------------------------------------
 
     async def _request(
-        self, frame: dict[str, Any], *, ack_types: tuple[str, ...]
+        self,
+        frame: dict[str, Any],
+        *,
+        ack_types: tuple[str, ...],
+        before_write: Callable[[], None] | None = None,
     ) -> dict[str, Any]:
         self._next_req += 1
         req_id = f"req_{self._next_req}"
         frame = {**frame, "id": req_id}
         loop = asyncio.get_running_loop()
         fut: asyncio.Future = loop.create_future()
-        self._pending[req_id] = _PendingRequest(fut=fut, types=ack_types)
+        pending = _PendingRequest(fut=fut, types=ack_types)
+        self._pending[req_id] = pending
         try:
-            await self._send(frame)
+            await self._send(frame, pending=pending, before_write=before_write)
             reply = await fut
         finally:
             self._pending.pop(req_id, None)
@@ -393,12 +400,24 @@ class Connection:
             raise ConnectionError_(f"{reply.get('code', '')}: {reply.get('message', '')}")
         return reply
 
-    async def _send(self, frame: dict[str, Any]) -> None:
+    async def _send(
+        self,
+        frame: dict[str, Any],
+        *,
+        pending: _PendingRequest | None = None,
+        before_write: Callable[[], None] | None = None,
+    ) -> None:
         if self._writer is None:
             raise ConnectionError_("not connected")
         data = (json.dumps(frame, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
         async with self._write_lock:
+            # No await between the hook, write() and the flag, so what the
+            # hook sees as written is exactly what is ahead on the wire.
+            if before_write is not None:
+                before_write()
             self._writer.write(data)
+            if pending is not None:
+                pending.written = True
             await self._writer.drain()
 
     # ------------------------------------------------------------------
@@ -608,10 +627,19 @@ class Connection:
             # Half-open sockets (e.g. an SSH-forwarded socket whose far end
             # vanished) never error on their own — only a missing pong shows
             # the link is dead (#20).
-            busy = {p.fut for p in self._pending.values() if not p.fut.done()}
-            ping = asyncio.create_task(self._request({"type": "ping"}, ack_types=("pong",)))
+            ahead: asyncio.Future[set[asyncio.Future]] = asyncio.get_running_loop().create_future()
+
+            def snapshot_ahead(ahead: asyncio.Future = ahead) -> None:
+                if not ahead.done():
+                    ahead.set_result(
+                        {p.fut for p in self._pending.values() if p.written and not p.fut.done()}
+                    )
+
+            ping = asyncio.create_task(
+                self._request({"type": "ping"}, ack_types=("pong",), before_write=snapshot_ahead)
+            )
             try:
-                reason = await self._await_pong(ping, busy)
+                reason = await self._await_pong(ping, ahead)
             finally:
                 if not ping.done():
                     await _cancel_and_wait(ping)
@@ -627,18 +655,31 @@ class Connection:
                 # An error reply still proves the daemon is there.
                 continue
 
-    async def _await_pong(self, ping: asyncio.Task[Any], busy: set[asyncio.Future]) -> str | None:
+    async def _await_pong(
+        self, ping: asyncio.Task[Any], ahead: asyncio.Future[set[asyncio.Future]]
+    ) -> str | None:
         """Wait for ``ping`` to finish; return why the link is dead, or None.
 
         The daemon reads one frame at a time and awaits each request before
         the next (a ``session.open`` waits for its backend to start), so a
-        ping sent behind a slow request can't be answered until that request
-        is. While a request sent before the ping is still pending, the
-        deadline is ``request_timeout``; once all of them are answered, the
-        pong gets a fresh ``pong_timeout``.
+        ping written behind a slow request can't be answered until that
+        request is. ``ahead`` resolves, as the ping is written, to the
+        requests already on the wire before it. While one of them is still
+        pending, the deadline is ``request_timeout``; once all of them are
+        answered, the pong gets a fresh ``pong_timeout``.
         """
-        start = time.monotonic()
-        deadline = start + (self._request_timeout if busy else self._pong_timeout)
+        # Until the ping is written, anything pending may be ahead of it.
+        pending = any(not p.fut.done() for p in self._pending.values())
+        wait = self._request_timeout if pending else self._pong_timeout
+        done, _ = await asyncio.wait(
+            {ping, ahead}, timeout=wait, return_when=asyncio.FIRST_COMPLETED
+        )
+        if ping in done:
+            return None
+        if not done:
+            return f"ping not written within {wait:g}s"
+        busy = set(ahead.result())
+        deadline = time.monotonic() + (self._request_timeout if busy else self._pong_timeout)
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:

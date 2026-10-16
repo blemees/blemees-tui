@@ -713,3 +713,41 @@ async def test_slow_open_does_not_trip_the_pong_deadline(short_tmpdir):
         await conn.stop()
         server.close()
         await server.wait_closed()
+
+
+@pytest.mark.asyncio
+async def test_open_written_just_before_the_ping_gets_the_request_timeout(short_tmpdir):
+    # An open that wakes in the same loop tick as the ping loop reaches the
+    # wire before the ping. It is ahead of the ping in the daemon's queue,
+    # so the bound must be request_timeout even though it was not pending
+    # yet when the ping loop decided to ping.
+    server, seen = await _serial_daemon(short_tmpdir / "c.sock", open_delay=0.3)
+    opens: list[asyncio.Task] = []
+
+    async def open_on_ping_tick():
+        await asyncio.sleep(0.02)
+        return await conn.open_session("sid_c", agent="claude")
+
+    def on_status(status):
+        if status.state == "connected" and not opens:
+            opens.append(asyncio.ensure_future(open_on_ping_tick()))
+
+    conn = Connection(
+        socket_path=str(short_tmpdir / "c.sock"),
+        ping_interval=0.02,
+        idle_threshold=0.0,
+        pong_timeout=0.05,
+        request_timeout=1.0,
+        on_status_change=on_status,
+    )
+    _fast_backoff(conn)
+    await conn.start()
+    try:
+        assert await _until(lambda: bool(opens))
+        reply = await asyncio.wait_for(opens[0], timeout=3.0)
+        assert reply["type"] == "session.opened"
+        assert seen["hello"] == 1
+    finally:
+        await conn.stop()
+        server.close()
+        await server.wait_closed()

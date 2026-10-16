@@ -178,10 +178,12 @@ Send `ping` every 15s while idle (no inbound for ≥10s). Round-trip
 shown in debug pane (`Ctrl+D`); not in main UI. No `pong` within 10s →
 abort the socket and reconnect (catches half-open links, e.g. an
 SSH-forwarded socket whose far end vanished). The daemon finishes each
-request before it reads the next frame, so a ping sent while an earlier
-request is still pending (e.g. `session.open` waiting on backend startup)
+request before it reads the next frame, so a ping written behind a request
+that is still pending (e.g. `session.open` waiting on backend startup)
 can't be answered until that request is. In that case the deadline is 120s
-for the pending request(s), then a fresh 10s for the `pong`.
+for the pending request(s), then a fresh 10s for the `pong`. "Behind" is
+wire order: the set of earlier requests is taken under the write lock, just
+before the ping is written.
 
 ### 6.5 Fatal protocol mismatch
 
