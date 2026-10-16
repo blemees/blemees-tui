@@ -9,7 +9,7 @@ import pytest
 textual = pytest.importorskip("textual")
 
 from blemees_tui.app import BlemeesTuiApp  # noqa: E402
-from blemees_tui.connection import ConnectionError_  # noqa: E402
+from blemees_tui.connection import ConnectionError_, ConnectionStatus  # noqa: E402
 from blemees_tui.state import SessionMode, SessionState  # noqa: E402
 from blemees_tui.widgets.composer import ComposerWidget  # noqa: E402
 
@@ -190,6 +190,45 @@ async def test_cancelled_flush_requeues_message(isolated_state_dir, monkeypatch)
         assert task.cancelled()
         await pilot.pause()
         assert sess.pending_sends == ["first", "second"]
+        # The optimistic turn is undone too, or later flushes skip the session.
+        assert not sess.turn_active
+        assert sess.turns == []
+
+
+@pytest.mark.asyncio
+async def test_replacement_reconnect_flush_sends_cancelled_message(isolated_state_dir, monkeypatch):
+    # Link flaps while the reconnect flush is mid-send: the next "connected"
+    # cancels that flush and starts a new one. The new flush must send the
+    # message the old one popped, and keep the rest queued (#20).
+    await _start_app_no_socket(monkeypatch)
+    started = asyncio.Event()
+    sent: list[str] = []
+    calls = 0
+
+    async def _first_hangs(self, sid, text):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            started.set()
+            await asyncio.Event().wait()
+        sent.append(text)
+
+    monkeypatch.setattr("blemees_tui.connection.Connection.send_user", _first_hangs)
+    app = BlemeesTuiApp()
+    async with app.run_test() as pilot:
+        sess = _seed(app)
+        app.state.connection_status = "disconnected"
+        sess.pending_sends.extend(["first", "second"])
+        app._on_connection_status(ConnectionStatus(state="connected"))
+        await started.wait()
+        app._on_connection_status(ConnectionStatus(state="reconnecting", attempt=1))
+        app._on_connection_status(ConnectionStatus(state="connected"))
+        await asyncio.wait_for(app._reconnect_flush_task, timeout=2.0)
+        await pilot.pause()
+        assert sent == ["first"]
+        assert sess.pending_sends == ["second"]
+        assert sess.turn_active
+        assert [t.user_text for t in sess.turns] == ["first"]
 
 
 @pytest.mark.asyncio
