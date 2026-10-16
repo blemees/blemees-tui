@@ -91,9 +91,7 @@ class SidebarWidget(Widget):
 
         for name in order:
             members = by_agent.get(name, [])
-            live_count = sum(
-                1 for _, _, s in members if s.mode != SessionMode.CLOSED
-            )
+            live_count = sum(1 for _, _, s in members if s.mode != SessionMode.CLOSED)
             label = _escape_markup(name) if name else "(no agent)"
             count_txt = f" [dim]({live_count})[/]" if live_count else ""
             if members:

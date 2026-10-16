@@ -158,6 +158,7 @@ def _format_entry(entry: EventLogEntry) -> str:
         datetime.fromtimestamp(entry.ts_ms / 1000, tz=UTC).astimezone().strftime("%H:%M:%S.%f")[:-3]
     )
     sid = entry.session_id[:8] if entry.session_id else "-"
+
     # category / sid / message all carry daemon- or agent-supplied text. Escape
     # every '[' for Textual's markup parser: rich.markup.escape only escapes
     # brackets that open a valid Rich tag, so bracketed payloads slip through
