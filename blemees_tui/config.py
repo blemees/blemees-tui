@@ -17,6 +17,11 @@ from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
+
+class ConfigError(ValueError):
+    """The config file the user chose (``--config`` / ``$BLEMEES_TUI_CONFIG``) is unusable."""
+
+
 # ---------------------------------------------------------------------------
 # Dataclass shape
 # ---------------------------------------------------------------------------
@@ -101,10 +106,19 @@ def load_config(path: Path | None = None) -> Config:
     """Load + validate config from disk (or built-in defaults if absent).
 
     Unknown sections and keys are ignored, so config files written for
-    older versions keep loading.
+    older versions keep loading. A missing file at the default path means
+    built-in defaults; a missing file the user chose (``path`` /
+    ``$BLEMEES_TUI_CONFIG``) raises :class:`ConfigError`.
     """
     env_path = os.environ.get("BLEMEES_TUI_CONFIG")
-    cfg_path = path or (Path(env_path).expanduser() if env_path else default_config_path())
+    if path is not None:
+        cfg_path, source = path, "--config"
+    elif env_path:
+        cfg_path, source = Path(env_path).expanduser(), "$BLEMEES_TUI_CONFIG"
+    else:
+        cfg_path, source = default_config_path(), None
+    if source is not None and not cfg_path.exists():
+        raise ConfigError(f"config file not found: {cfg_path} (from {source})")
     raw: dict[str, Any] = {}
     if cfg_path.exists():
         with cfg_path.open("rb") as fh:

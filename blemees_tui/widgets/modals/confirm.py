@@ -9,13 +9,13 @@ from textual.widgets import Static
 
 
 class ConfirmModal(ModalScreen[bool]):
-    """Dismisses with ``True`` on y / Enter, ``False`` on n / Esc."""
+    """Dismisses with ``True`` on y, ``False`` on n / Esc / Enter (default is No)."""
 
     BINDINGS = [
         ("y", "confirm", "Yes"),
-        ("enter", "confirm", "Yes"),
         ("n", "cancel", "No"),
         ("escape", "cancel", "No"),
+        ("enter", "cancel", "No"),
     ]
 
     DEFAULT_CSS = """
@@ -31,7 +31,7 @@ class ConfirmModal(ModalScreen[bool]):
         with Vertical(id="confirm-box"):
             # Prompt carries user-controlled text (session titles) — no markup.
             yield Static(self._prompt, markup=False)
-            yield Static("\n[b]y[/] / Enter = yes    [b]n[/] / Esc = no")
+            yield Static("\n[b]y[/] = yes    [b]n[/] / Esc / Enter = no")
 
     def action_confirm(self) -> None:
         self.dismiss(True)

@@ -44,13 +44,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     # Defer the heavy import so ``blemees --version`` stays fast.
     from .app import BlemeesTuiApp
+    from .config import ConfigError
 
-    app = BlemeesTuiApp(
-        socket_override=args.socket,
-        config_path_override=args.config,
-        log_level_override=args.log_level,
-        profile_override=args.profile,
-    )
+    try:
+        app = BlemeesTuiApp(
+            socket_override=args.socket,
+            config_path_override=args.config,
+            log_level_override=args.log_level,
+            profile_override=args.profile,
+        )
+    except ConfigError as exc:
+        print(f"blemees: {exc}", file=sys.stderr)
+        return 2
     app.run()
     return getattr(app, "return_code", 0) or 0
 

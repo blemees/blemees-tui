@@ -322,6 +322,16 @@ async def test_delete_session_key_asks_for_confirmation(isolated_state_dir, monk
         assert "s1" in app.state.sessions
         assert close_calls == []
 
+        # Enter also cancels — the default answer is No.
+        await pilot.press("ctrl+shift+w")
+        await pilot.pause()
+        assert isinstance(app.screen, ModalScreen)
+        await pilot.press("enter")
+        await pilot.pause()
+        assert not isinstance(app.screen, ModalScreen)
+        assert "s1" in app.state.sessions
+        assert close_calls == []
+
         # Ctrl+Shift+W then "y" deletes.
         await pilot.press("ctrl+shift+w")
         await pilot.pause()

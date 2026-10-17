@@ -72,10 +72,11 @@ project tracks [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   flush is cancelled mid-send) goes back on the queue instead of being
   dropped, and its optimistic turn is undone so the next flush sends it.
 - **Config and docs drift (#21).** `--config` and `$BLEMEES_TUI_CONFIG`
-  now pick the config file (they were ignored). `[ui] theme` now sets the
-  Textual theme. `tui.log` rotates daily, so `logging.keep_days` keeps
-  that many days (it kept weeks). `Ctrl+Shift+W` asks for confirmation
-  (y / Enter, n / Esc) before it deletes a session; `:delete` does not.
+  now pick the config file (they were ignored); a path that does not exist
+  is an error (exit code 2). `[ui] theme` now sets the Textual theme.
+  `tui.log` rotates daily, so `logging.keep_days` keeps that many days (it
+  kept weeks). `Ctrl+Shift+W` asks for confirmation (y deletes; n / Esc /
+  Enter cancel) before it deletes a session; `:delete` does not.
   The help overlay no longer claims a double `Ctrl+C` quits.
 - Tool calls now appear in Claude Code sessions (extracted from
   `agent.message.content` rather than relying on suppressed

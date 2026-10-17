@@ -87,6 +87,7 @@ for TUI commands — see `:help`.
 
 `$XDG_CONFIG_HOME/blemees/tui.toml` (or `~/.config/blemees/tui.toml`; point
 elsewhere with `--config` or `$BLEMEES_TUI_CONFIG`). Unknown keys are ignored.
+A `--config` or `$BLEMEES_TUI_CONFIG` path that does not exist is an error.
 Agent, model and permission settings come from the daemon profile you pick
 when you open a session, not from this file.
 

@@ -8,14 +8,17 @@ import pytest
 
 from blemees_tui.config import (
     Config,
+    ConfigError,
     apply_cli_overrides,
     apply_env_overrides,
     load_config,
 )
 
 
-def test_defaults_when_no_file(tmp_path: Path):
-    cfg = load_config(tmp_path / "absent.toml")
+def test_defaults_when_no_file(isolated_state_dir: Path):
+    # No --config, no $BLEMEES_TUI_CONFIG, and no file at the default path:
+    # first run, so built-in defaults are used without error.
+    cfg = load_config()
     assert isinstance(cfg, Config)
     assert cfg.connection.socket == ""
     assert cfg.ui.theme == "dark"
@@ -119,6 +122,39 @@ def test_explicit_path_beats_env_var_path(monkeypatch: pytest.MonkeyPatch, tmp_p
     monkeypatch.setenv("BLEMEES_TUI_CONFIG", str(env_file))
     cfg = load_config(explicit)
     assert cfg.logging.level == "debug"
+
+
+def test_missing_explicit_path_is_an_error(tmp_path: Path):
+    missing = tmp_path / "nope.toml"
+    with pytest.raises(ConfigError, match="config file not found") as exc:
+        load_config(missing)
+    assert str(missing) in str(exc.value)
+    assert "--config" in str(exc.value)
+
+
+def test_missing_env_var_path_is_an_error(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    missing = tmp_path / "nope.toml"
+    monkeypatch.setenv("BLEMEES_TUI_CONFIG", str(missing))
+    with pytest.raises(ConfigError, match="config file not found") as exc:
+        load_config()
+    assert str(missing) in str(exc.value)
+    assert "$BLEMEES_TUI_CONFIG" in str(exc.value)
+
+
+def test_main_exits_2_on_missing_config(
+    isolated_state_dir: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+):
+    from blemees_tui.__main__ import main
+
+    run_calls: list[object] = []
+    monkeypatch.setattr("blemees_tui.app.BlemeesTuiApp.run", lambda self: run_calls.append(self))
+
+    rc = main(["--config", str(isolated_state_dir / "nope.toml")])
+    assert rc == 2
+    assert run_calls == []
+    err = capsys.readouterr().err
+    assert err.startswith("blemees: ")
+    assert "config file not found" in err
 
 
 def test_app_honours_config_path_override(isolated_state_dir: Path):
