@@ -20,7 +20,7 @@ Claude Code and Codex are great in their own terminal, but bouncing
 between sessions, recovering from a closed shell, or watching a
 long-running agent from a second machine all leave you stitching tabs
 together by hand. `blemees-tui` is a thin presentation layer over
-[`blemees-agentd`](https://github.com/blemees/blemees-daemon) that keeps every
+[`blemees-agentd`](https://github.com/blemees/blemees-agent) that keeps every
 session live in one window.
 
 ## Headline features
@@ -49,7 +49,7 @@ brew install blemees/tap/blemees-tui  # Homebrew (planned)
 ```
 
 Requires Python ≥ 3.11 and a running
-[`blemees-agentd ≥ 0.9.0`](https://github.com/blemees/blemees-daemon) Unix
+[`blemees-agentd ≥ 0.11.0`](https://github.com/blemees/blemees-agent) Unix
 socket.
 
 ## Build the site locally

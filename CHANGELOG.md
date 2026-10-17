@@ -71,6 +71,12 @@ project tracks [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   wait. A queued message whose send fails with a socket error (or whose
   flush is cancelled mid-send) goes back on the queue instead of being
   dropped, and its optimistic turn is undone so the next flush sends it.
+- **Config and docs drift (#21).** `--config` and `$BLEMEES_TUI_CONFIG`
+  now pick the config file (they were ignored). `[ui] theme` now sets the
+  Textual theme. `tui.log` rotates daily, so `logging.keep_days` keeps
+  that many days (it kept weeks). `Ctrl+Shift+W` asks for confirmation
+  (y / Enter, n / Esc) before it deletes a session; `:delete` does not.
+  The help overlay no longer claims a double `Ctrl+C` quits.
 - Tool calls now appear in Claude Code sessions (extracted from
   `agent.message.content` rather than relying on suppressed
   `agent.tool_use` frames).
@@ -98,6 +104,13 @@ project tracks [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Footer uses muted `$panel` background; header keeps the accent colour.
 - Connection status dots use `bold bright_*` variants for visibility on
   coloured footer backgrounds.
+
+### Removed
+- Unused config settings (#21): the `[defaults]` section (daemon
+  profiles own backend, model, permission mode and sandbox), `[ui]
+  sidebar_width`, `[ui] markdown_code_theme`, `[keybindings]`, and the
+  `BLEMEES_TUI_BACKEND` / `BLEMEES_TUI_CWD` env vars. Old config files
+  that still have them load as before; the keys are ignored.
 
 ## [0.1.0] - TBD
 

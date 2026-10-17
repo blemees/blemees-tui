@@ -287,3 +287,57 @@ async def test_scene_event_log_overlay_opens(isolated_state_dir):
         from blemees_tui.widgets.event_log import EventLogOverlay
 
         assert isinstance(app.screen, EventLogOverlay)
+
+
+@pytest.mark.asyncio
+async def test_delete_session_key_asks_for_confirmation(isolated_state_dir, monkeypatch):
+    from textual.screen import ModalScreen
+
+    close_calls: list[tuple[str, bool]] = []
+
+    async def fake_close(self, session_id, *, delete=False):
+        close_calls.append((session_id, delete))
+
+    monkeypatch.setattr("blemees_tui.connection.Connection.close_session", fake_close)
+
+    app = BlemeesTuiApp()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.state.sessions["s1"] = SessionState(session_id="s1", backend="claude", title="mine")
+        app.state.active_session_id = "s1"
+        app._refresh_ui()
+        await pilot.pause()
+
+        # Ctrl+Shift+W opens a confirm modal; nothing is deleted yet.
+        await pilot.press("ctrl+shift+w")
+        await pilot.pause()
+        assert "s1" in app.state.sessions
+        assert close_calls == []
+        assert isinstance(app.screen, ModalScreen)
+
+        # "n" cancels — session survives.
+        await pilot.press("n")
+        await pilot.pause()
+        assert not isinstance(app.screen, ModalScreen)
+        assert "s1" in app.state.sessions
+        assert close_calls == []
+
+        # Ctrl+Shift+W then "y" deletes.
+        await pilot.press("ctrl+shift+w")
+        await pilot.pause()
+        await pilot.press("y")
+        await pilot.pause()
+        assert close_calls == [("s1", True)]
+        assert "s1" not in app.state.sessions
+
+
+@pytest.mark.asyncio
+async def test_delete_session_key_without_active_session_shows_no_modal(isolated_state_dir):
+    from textual.screen import ModalScreen
+
+    app = BlemeesTuiApp()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("ctrl+shift+w")
+        await pilot.pause()
+        assert not isinstance(app.screen, ModalScreen)

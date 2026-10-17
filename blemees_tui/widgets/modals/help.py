@@ -13,7 +13,7 @@ _KEY_TABLE = """\
   Ctrl+T            Attach to existing (watch)
   Ctrl+W            Close current session
   Ctrl+Shift+W      Delete current session (confirm)
-  Ctrl+C            Interrupt turn (twice = quit)
+  Ctrl+C            Interrupt turn
   Ctrl+R            Force reconnect
   Ctrl+E            Event log overlay
   Ctrl+D            Debug pane (raw frames)
