@@ -282,6 +282,47 @@ def test_session_info_reply_zero_context_tokens_leaves_window_unset():
     assert s.context_window == 0
 
 
+def test_session_info_reply_uses_daemon_context_window():
+    """The daemon's ``context_window`` (ACP ``usage_update.size``,
+    blemees/blemees-agent#67) is authoritative and may shrink."""
+    s = _new()
+    reply = {"type": "session.info_reply", "session_id": "s1"}
+    apply(s, {**reply, "context_tokens": 50_000, "context_window": 200_000})
+    assert s.context_window == 200_000
+    s.context_window = 1_000_000
+    apply(s, {**reply, "context_tokens": 50_000, "context_window": 200_000})
+    assert s.context_window == 200_000
+
+
+def test_session_info_reply_daemon_context_window_skips_tier_guess():
+    s = _new()
+    apply(
+        s,
+        {
+            "type": "session.info_reply",
+            "session_id": "s1",
+            "context_tokens": 10_000,
+            "context_window": 1_000_000,
+        },
+    )
+    assert s.context_window == 1_000_000
+
+
+def test_session_info_reply_null_context_window_falls_back_to_tier_guess():
+    """Older daemons send no (or a null) ``context_window``."""
+    s = _new()
+    apply(
+        s,
+        {
+            "type": "session.info_reply",
+            "session_id": "s1",
+            "context_tokens": 300_000,
+            "context_window": None,
+        },
+    )
+    assert s.context_window == 1_000_000
+
+
 def _err(code: str) -> dict:
     return {"type": "session.error", "session_id": "s1", "code": code, "message": code}
 

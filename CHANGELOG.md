@@ -73,7 +73,9 @@ project tracks [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   dropped, and its optimistic turn is undone so the next flush sends it.
 - **Reducer / UI state (#19).** The `ctx N%` meter now shows from the
   first non-zero `context_tokens` report (the context window was never
-  set from 0). The meter also needs the daemon fix in
+  set from 0). It uses the daemon's `context_window` when given
+  (blemees/blemees-agent#67, issue #66), else a guess from known window
+  tiers. The meter also needs the daemon fix in
   blemees/blemees-agent#66: until then the daemon reports
   `context_tokens: 0` and the meter stays hidden. Cumulative token usage
   from `session.info_reply` is now read from the ACP camelCase keys

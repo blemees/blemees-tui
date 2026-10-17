@@ -382,11 +382,16 @@ def _round_up_window(tokens: int) -> int:
 
 def _on_session_info_reply(state: SessionState, frame: dict[str, Any]) -> None:
     ctx = frame.get("context_tokens")
+    window = frame.get("context_window")
     if isinstance(ctx, int) and ctx >= 0:
         state.context_tokens = ctx
-        # Initialise the window on the first non-zero report, then grow it
-        # (never shrink) when usage passes the current tier (#19).
-        if ctx > 0 and (not state.context_window or ctx > state.context_window):
+    if isinstance(window, int) and window > 0:
+        # Authoritative ACP ``usage_update.size`` (blemees-agent#67); may shrink.
+        state.context_window = window
+    elif isinstance(ctx, int) and ctx > 0:
+        # Older daemons: initialise the window on the first non-zero report,
+        # then grow it (never shrink) when usage passes the current tier (#19).
+        if not state.context_window or ctx > state.context_window:
             state.context_window = _round_up_window(ctx)
     if frame.get("model"):
         state.model = str(frame["model"])
