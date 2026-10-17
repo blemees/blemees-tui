@@ -57,8 +57,8 @@ project tracks [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 - `session.stderr` frames were dropped. The agent's stderr lines now
-  show dim in the session view, rate-limited to 50 lines per 10 s with a
-  "lines suppressed" note (#49).
+  show dim in the session view (the last 5 of the newest 50), cleared
+  when a new turn starts (#49).
 - A fast agent's reply no longer leaves the session stuck "working".
   The TUI recorded the user prompt after the send returned, so a
   `session.result` reduced during the write opened a second turn that

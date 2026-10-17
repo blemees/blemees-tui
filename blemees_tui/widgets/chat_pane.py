@@ -534,19 +534,14 @@ class ChatPaneWidget(Widget):
 
     def _sync_stderr(self, session: SessionState, scroll: VerticalScroll) -> None:
         lines = session.stderr_lines
-        suppressed = session.stderr_suppressed
-        if not lines and not suppressed:
+        if not lines:
             if self._stderr_widget is not None:
                 self._stderr_widget.remove()
                 self._stderr_widget = None
             return
-        # Dim and short: the last few lines only. The reducer keeps a
-        # bounded, rate-limited buffer (#49).
-        rendered_lines = [f"[dim]stderr › {_escape(line)}[/]" for line in lines[-5:]]
-        if suppressed:
-            noun = "line" if suppressed == 1 else "lines"
-            rendered_lines.append(f"[dim]… {suppressed} {noun} suppressed (rate limit)[/]")
-        rendered = "\n".join(rendered_lines)
+        # Dim and short: the last few lines only. The reducer keeps the
+        # newest 50, cleared when a new turn starts (#49).
+        rendered = "\n".join(f"[dim]stderr › {_escape(line)}[/]" for line in lines[-5:])
         if self._stderr_widget is None:
             self._stderr_widget = Static(rendered)
             scroll.mount(self._stderr_widget)

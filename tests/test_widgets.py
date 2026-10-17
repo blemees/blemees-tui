@@ -623,13 +623,11 @@ async def test_chat_pane_renders_stderr_dim():
         # Only the last few lines are shown.
         assert "warn 7" in markup and "warn 3" in markup
         assert "warn 2" not in markup
-        assert "suppressed" not in markup
 
 
 @pytest.mark.asyncio
-async def test_chat_pane_stderr_markup_unsafe_line_and_suppressed_note():
-    """A stderr line with '[' renders as literal text (no MarkupError), and
-    rate-limited lines show a dim "suppressed" note (#49)."""
+async def test_chat_pane_stderr_markup_unsafe_line():
+    """A stderr line with '[' renders as literal text (no MarkupError) (#49)."""
     from textual.content import Content
 
     app = _ChatOnlyApp()
@@ -638,14 +636,31 @@ async def test_chat_pane_stderr_markup_unsafe_line_and_suppressed_note():
         sess = SessionState(session_id="s1")
         raw = '[HumanGate(id="g", on_timeout="trust")] [b]not bold'
         apply(sess, {"type": "session.stderr", "session_id": "s1", "line": raw})
-        sess.stderr_suppressed = 7
         chat.show_session(sess)
         await pilot.pause()  # MarkupError would crash here
         await pilot.pause()
         assert chat._stderr_widget is not None
         plain = Content.from_markup(chat._stderr_widget.content).plain
         assert raw in plain
-        assert "7 lines suppressed (rate limit)" in plain
+
+
+@pytest.mark.asyncio
+async def test_chat_pane_stderr_removed_on_new_turn():
+    """A new prompt clears the stderr lines and the pane drops the widget (#49)."""
+    app = _ChatOnlyApp()
+    async with app.run_test() as pilot:
+        chat = app.query_one("#chat", ChatPaneWidget)
+        sess = SessionState(session_id="s1")
+        apply(sess, {"type": "session.stderr", "session_id": "s1", "line": "warn"})
+        chat.show_session(sess)
+        await pilot.pause()
+        widget = chat._stderr_widget
+        assert widget is not None
+        apply_user_prompt(sess, "next")
+        chat.show_session(sess)
+        await pilot.pause()
+        assert chat._stderr_widget is None
+        assert not widget.is_attached
 
 
 @pytest.mark.asyncio
