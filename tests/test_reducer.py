@@ -356,6 +356,52 @@ def test_unsuccessful_result_keeps_pending_errors():
     assert [e["code"] for e in s.pending_errors] == ["auth_required"]
 
 
+# ---- #49: session.stderr ------------------------------------------
+
+
+def _stderr(line) -> dict:
+    return {"type": "session.stderr", "session_id": "s1", "line": line}
+
+
+def test_session_stderr_appends_line():
+    s = _new()
+    apply(s, _stderr("warn: something"))
+    assert s.stderr_lines == ["warn: something"]
+
+
+def test_session_stderr_keeps_newest_lines():
+    s = _new()
+    for i in range(120):
+        apply(s, _stderr(f"l{i}"))
+    assert s.stderr_lines == [f"l{i}" for i in range(70, 120)]
+
+
+def test_session_stderr_burst_keeps_final_error():
+    """A noisy burst must not hide the line that explains the failure."""
+    s = _new()
+    for i in range(80):
+        apply(s, _stderr(f"debug {i}"))
+    apply(s, _stderr("Error: FATAL the real cause"))
+    assert s.stderr_lines[-1] == "Error: FATAL the real cause"
+    assert len(s.stderr_lines) == 50
+
+
+def test_session_stderr_ignores_bad_line():
+    s = _new()
+    apply(s, {"type": "session.stderr", "session_id": "s1"})
+    apply(s, _stderr(None))
+    apply(s, _stderr(42))
+    assert s.stderr_lines == []
+
+
+def test_user_prompt_clears_stderr_lines():
+    """A new turn starts with an empty stderr pane."""
+    s = _new()
+    apply(s, _stderr("old warning"))
+    apply_user_prompt(s, "next")
+    assert s.stderr_lines == []
+
+
 def test_unknown_frame_type_is_ignored():
     s = _new()
     apply(s, {"type": "totally.unknown", "session_id": "s1", "seq": 1})

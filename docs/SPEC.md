@@ -453,6 +453,16 @@ The session keeps at most the 20 newest errors (the bubble shows the last
 5). They clear when a later turn ends with `stop_reason: "end_turn"`; a
 `cancelled` / `refusal` / `max_tokens` turn keeps them.
 
+### 9.9 Agent stderr
+
+`session.stderr{line}` lines show dim in the session view, below the
+error bubbles (`stderr › …`, the last 5 lines). The agent's stderr is
+process-wide and the daemon fans it to every session. The TUI keeps the
+newest 50 lines per session and clears them when a new turn starts, so
+the view shows the stderr received since the current turn began (it
+stays visible after the turn ends, until the next prompt). Not
+snapshotted.
+
 ---
 
 ## 10. Input

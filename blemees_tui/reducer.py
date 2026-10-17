@@ -7,7 +7,8 @@ for the duration of the call.
 
 It consumes ``blemees/3`` frames: ``session.update`` (a verbatim ACP
 ``session/update`` payload), ``session.result``, ``session.opened``,
-``session.error``, and the per-session lifecycle notices. The user turn is
+``session.error``, ``session.stderr`` (agent stderr lines), and the
+per-session lifecycle notices. The user turn is
 *not* echoed by the daemon, so the app records it locally via
 :func:`apply_user_prompt`.
 
@@ -69,6 +70,8 @@ def apply_user_prompt(state: SessionState, text: str) -> SessionState:
     turn = Turn(user_text=text)
     state.turns.append(turn)
     state.turn_active = True
+    # The stderr pane shows the lines received since this turn began (#49).
+    state.stderr_lines.clear()
     if not state.title and text:
         state.title = " ".join(text.split())[:80]
     return state
@@ -317,6 +320,24 @@ def _on_session_error(state: SessionState, frame: dict[str, Any]) -> None:
 _MAX_PENDING_ERRORS = 20
 
 
+# Newest stderr lines kept per session (#49); the chat pane shows the last few.
+_MAX_STDERR_LINES = 50
+
+
+def _on_session_stderr(state: SessionState, frame: dict[str, Any]) -> None:
+    """``session.stderr`` carries one line of the agent's process-wide
+    stderr, fanned out to every session. The buffer is bounded to the
+    newest ``_MAX_STDERR_LINES`` lines; there is no rate limit, so the
+    latest line (often the real cause of a failure) is always kept.
+    ``apply_user_prompt`` clears it when a new turn starts.
+    """
+    line = frame.get("line")
+    if not isinstance(line, str):
+        return
+    state.stderr_lines.append(line)
+    del state.stderr_lines[:-_MAX_STDERR_LINES]
+
+
 # ---------------------------------------------------------------------------
 # Lifecycle / control frames
 # ---------------------------------------------------------------------------
@@ -419,6 +440,7 @@ _HANDLERS = {
     "session.update": _on_session_update,
     "session.result": _on_result,
     "session.error": _on_session_error,
+    "session.stderr": _on_session_stderr,
     "session.opened": _on_session_opened,
     "session.attached": _on_session_opened,  # same replay-window logic
     "session.taken": _on_session_taken,

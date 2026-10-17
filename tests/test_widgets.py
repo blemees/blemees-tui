@@ -607,6 +607,63 @@ async def test_chat_pane_renders_pending_errors():
 
 
 @pytest.mark.asyncio
+async def test_chat_pane_renders_stderr_dim():
+    """session.stderr lines show quietly in the session view (#49)."""
+    app = _ChatOnlyApp()
+    async with app.run_test() as pilot:
+        chat = app.query_one("#chat", ChatPaneWidget)
+        sess = SessionState(session_id="s1")
+        for i in range(8):
+            apply(sess, {"type": "session.stderr", "session_id": "s1", "line": f"warn {i}"})
+        chat.show_session(sess)
+        await pilot.pause()
+        assert chat._stderr_widget is not None
+        markup = chat._stderr_widget.content
+        assert "[dim]" in markup
+        # Only the last few lines are shown.
+        assert "warn 7" in markup and "warn 3" in markup
+        assert "warn 2" not in markup
+
+
+@pytest.mark.asyncio
+async def test_chat_pane_stderr_markup_unsafe_line():
+    """A stderr line with '[' renders as literal text (no MarkupError) (#49)."""
+    from textual.content import Content
+
+    app = _ChatOnlyApp()
+    async with app.run_test() as pilot:
+        chat = app.query_one("#chat", ChatPaneWidget)
+        sess = SessionState(session_id="s1")
+        raw = '[HumanGate(id="g", on_timeout="trust")] [b]not bold'
+        apply(sess, {"type": "session.stderr", "session_id": "s1", "line": raw})
+        chat.show_session(sess)
+        await pilot.pause()  # MarkupError would crash here
+        await pilot.pause()
+        assert chat._stderr_widget is not None
+        plain = Content.from_markup(chat._stderr_widget.content).plain
+        assert raw in plain
+
+
+@pytest.mark.asyncio
+async def test_chat_pane_stderr_removed_on_new_turn():
+    """A new prompt clears the stderr lines and the pane drops the widget (#49)."""
+    app = _ChatOnlyApp()
+    async with app.run_test() as pilot:
+        chat = app.query_one("#chat", ChatPaneWidget)
+        sess = SessionState(session_id="s1")
+        apply(sess, {"type": "session.stderr", "session_id": "s1", "line": "warn"})
+        chat.show_session(sess)
+        await pilot.pause()
+        widget = chat._stderr_widget
+        assert widget is not None
+        apply_user_prompt(sess, "next")
+        chat.show_session(sess)
+        await pilot.pause()
+        assert chat._stderr_widget is None
+        assert not widget.is_attached
+
+
+@pytest.mark.asyncio
 async def test_chat_pane_replay_gap_banner():
     """When state.replay_gap is True, a banner is mounted at the top."""
     app = _ChatOnlyApp()

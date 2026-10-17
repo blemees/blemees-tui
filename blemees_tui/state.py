@@ -151,6 +151,10 @@ class SessionState:
     pending_permission: dict[str, Any] | None = None
 
     pending_errors: list[dict[str, Any]] = field(default_factory=list)
+    # Agent stderr lines from ``session.stderr`` (#49), newest last. The
+    # reducer keeps the newest 50 and clears them when a new turn starts.
+    # Transient UI state; deliberately not snapshotted.
+    stderr_lines: list[str] = field(default_factory=list)
     # Messages typed while the agent was busy. Flushed FIFO when
     # ``agent.result`` lands and ``turn_active`` flips back to False.
     pending_sends: list[str] = field(default_factory=list)
