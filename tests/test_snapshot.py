@@ -103,6 +103,85 @@ def test_session_to_dict_round_trip_preserves_blocks_and_usage():
     assert tool.result_text == "contents"
 
 
+def test_tool_block_status_kind_title_round_trip():
+    """Regression (#19): snapshots dropped the ACP tool fields, so a
+    restored transcript showed every tool as ``pending`` with no kind."""
+    sess = SessionState(session_id="s1")
+    sess.turns.append(
+        Turn(
+            blocks=[
+                ToolUseBlock(
+                    tool_use_id="t1",
+                    name="Read file",
+                    input={"path": "/x"},
+                    status="completed",
+                    kind="read",
+                    title="Read file",
+                ),
+                ToolUseBlock(
+                    tool_use_id="t2",
+                    name="Run tests",
+                    input=None,
+                    is_error=True,
+                    status="failed",
+                    kind="execute",
+                    title="Run tests",
+                ),
+            ],
+            locked=True,
+        )
+    )
+    restored = session_from_dict(session_to_dict(sess))
+    assert restored is not None
+    t1, t2 = restored.turns[0].blocks
+    assert isinstance(t1, ToolUseBlock) and isinstance(t2, ToolUseBlock)
+    assert (t1.status, t1.kind, t1.title) == ("completed", "read", "Read file")
+    assert (t2.status, t2.kind, t2.title) == ("failed", "execute", "Run tests")
+
+
+def test_old_snapshot_tool_block_without_acp_fields_loads_with_defaults():
+    """Snapshots written before the tool fields were persisted must still
+    load (no schema bump) — absent kind/title fall back to the dataclass
+    defaults; the absent status is derived from the result (see below)."""
+    payload = session_to_dict(_populated_session())
+    tool = payload["turns"][0]["blocks"][1]
+    assert tool["type"] == "tool_use"
+    for key in ("status", "kind", "title"):
+        tool.pop(key, None)
+    restored = session_from_dict(payload)
+    assert restored is not None
+    block = restored.turns[0].blocks[1]
+    assert isinstance(block, ToolUseBlock)
+    assert block.tool_use_id == "tu1"
+    # The fixture tool has result_text="contents" → completed, not pending.
+    assert (block.status, block.kind, block.title) == ("completed", "", "")
+
+
+@pytest.mark.parametrize(
+    ("result_text", "is_error", "expected"),
+    [
+        ("boom", True, "failed"),
+        (None, True, "failed"),
+        ("contents", False, "completed"),
+        ("", False, "completed"),
+        (None, False, "pending"),
+    ],
+)
+def test_old_snapshot_tool_status_derived_from_result(result_text, is_error, expected):
+    """Regression (#19 review): a pre-#19 snapshot has no ``status`` key, so
+    a finished tool restored as ``pending`` and kept the pending glyph."""
+    payload = session_to_dict(_populated_session())
+    tool = payload["turns"][0]["blocks"][1]
+    tool.pop("status")
+    tool["result_text"] = result_text
+    tool["is_error"] = is_error
+    restored = session_from_dict(payload)
+    assert restored is not None
+    block = restored.turns[0].blocks[1]
+    assert isinstance(block, ToolUseBlock)
+    assert block.status == expected
+
+
 def test_save_load_delete_round_trip(state_dir):
     sess = _populated_session()
     save_snapshot(sess)

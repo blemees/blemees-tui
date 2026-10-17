@@ -71,6 +71,25 @@ project tracks [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   wait. A queued message whose send fails with a socket error (or whose
   flush is cancelled mid-send) goes back on the queue instead of being
   dropped, and its optimistic turn is undone so the next flush sends it.
+- **Reducer / UI state (#19).** The `ctx N%` meter now shows from the
+  first non-zero `context_tokens` report (the context window was never
+  set from 0). It uses the daemon's `context_window` when given
+  (blemees/blemees-agent#67, issue #66), else a guess from known window
+  tiers. The meter also needs the daemon fix in
+  blemees/blemees-agent#66: until then the daemon reports
+  `context_tokens: 0` and the meter stays hidden. Cumulative token usage
+  from `session.info_reply` is now read from the ACP camelCase keys
+  (`inputTokens`, `cachedReadTokens`, …); before, every turn reset it to
+  zero. The `─── ↑in ↓out ───` result divider now shows when a turn ends;
+  it waited for a `duration_ms` that `blemees/3` never sends, and a
+  normal `end_turn` is no longer flagged in red. The token counts show
+  only when the agent reported usage (no more `↑0 · ↓0`), and a turn
+  with nothing to report has no divider. Restored transcripts keep each
+  tool call's status, kind and title. Older snapshots still load, and
+  their tool status is derived from the stored result instead of
+  showing every tool as pending. Session errors are capped at the 20 newest and clear when a
+  later turn ends with `end_turn`, so the `! N errors` chip and inline
+  bubbles no longer grow forever.
 - Tool calls now appear in Claude Code sessions (extracted from
   `agent.message.content` rather than relying on suppressed
   `agent.tool_use` frames).
@@ -87,6 +106,11 @@ project tracks [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   across every session.
 - Composer focused-state border no longer touches the footer; both
   states use a 1-cell border so layout never shifts on focus.
+
+### Removed
+- The footer `↺ rate` chip and the event log's **Notices** filter (#19).
+  The `blemees/3` daemon has no notice or rate-limit frame, so both were
+  always empty.
 
 ### Changed
 - Composer scoped to the right column under the chat pane only — the

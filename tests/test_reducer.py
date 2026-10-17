@@ -174,13 +174,186 @@ def test_session_info_reply_updates_context_and_usage():
             "context_tokens": 1234,
             "model": "sonnet",
             "cwd": "/proj",
-            "cumulative_usage": {"input_tokens": 100, "output_tokens": 50},
+            "cumulative_usage": {
+                "input_tokens": 100,
+                "output_tokens": 50,
+                "cache_read_input_tokens": 7,
+                "cache_creation_input_tokens": 3,
+            },
         },
     )
     assert s.context_tokens == 1234
     assert s.model == "sonnet"
     assert s.cwd == "/proj"
+    # snake_case (older daemons) still maps.
     assert s.cumulative_usage.input_tokens == 100
+    assert s.cumulative_usage.output_tokens == 50
+    assert s.cumulative_usage.cache_read_input_tokens == 7
+    assert s.cumulative_usage.cache_creation_input_tokens == 3
+
+
+def test_session_info_reply_reads_camelcase_cumulative_usage():
+    """Regression (#19 review): blemees/3 forwards ACP usage dumped by alias,
+    so ``cumulative_usage`` has camelCase keys. The reducer read only
+    snake_case and replaced the cumulative usage with zeros after every turn."""
+    s = _new()
+    apply(
+        s,
+        {
+            "type": "session.info_reply",
+            "session_id": "s1",
+            "cumulative_usage": {
+                "inputTokens": 1000,
+                "outputTokens": 400,
+                "cachedReadTokens": 20_000,
+                "cachedWriteTokens": 3000,
+                "thoughtTokens": 50,
+                "totalTokens": 24_450,
+            },
+        },
+    )
+    u = s.cumulative_usage
+    assert u.input_tokens == 1000
+    assert u.output_tokens == 400
+    assert u.cache_read_input_tokens == 20_000
+    assert u.cache_creation_input_tokens == 3000
+    assert u.reasoning_output_tokens == 50
+
+
+def test_session_info_reply_from_fixed_daemon_sets_context_meter():
+    """A blemees/3 ``session.info_reply`` from a daemon with the
+    blemees-agent#66 fix: ``context_tokens`` = input + cached read + cached
+    write of the last turn; usage payloads are ACP camelCase."""
+    s = _new()
+    apply(
+        s,
+        {
+            "type": "session.info_reply",
+            "session_id": "s1",
+            "id": "req-1",
+            "model": "claude-sonnet-4-5",
+            "cwd": "/proj",
+            "last_seq": 42,
+            "last_turn_at_ms": 1_760_000_000_000,
+            "last_turn_usage": {
+                "inputTokens": 1000,
+                "outputTokens": 400,
+                "cachedReadTokens": 20_000,
+                "cachedWriteTokens": 3000,
+                "totalTokens": 24_400,
+            },
+            "cumulative_usage": {
+                "inputTokens": 5000,
+                "outputTokens": 1200,
+                "cachedReadTokens": 60_000,
+                "cachedWriteTokens": 9000,
+                "totalTokens": 75_200,
+            },
+            "context_tokens": 24_000,
+        },
+    )
+    assert s.context_tokens == 24_000
+    assert s.context_window == 200_000
+    assert s.cumulative_usage.input_tokens == 5000
+    assert s.cumulative_usage.cache_read_input_tokens == 60_000
+    assert s.last_seq == 42
+
+
+def test_session_info_reply_initializes_context_window_from_zero():
+    """Regression (#19): a fresh session has ``context_window == 0``; the
+    first ``context_tokens`` report must set the window so the ctx meter
+    can render. The old guard needed a non-zero window to update it."""
+    s = _new()
+    assert s.context_window == 0
+    apply(s, {"type": "session.info_reply", "session_id": "s1", "context_tokens": 50_000})
+    assert s.context_window == 200_000
+    # A later report past the tier grows the window to the next tier.
+    apply(s, {"type": "session.info_reply", "session_id": "s1", "context_tokens": 300_000})
+    assert s.context_window == 1_000_000
+    # A smaller report never shrinks it.
+    apply(s, {"type": "session.info_reply", "session_id": "s1", "context_tokens": 10})
+    assert s.context_window == 1_000_000
+
+
+def test_session_info_reply_zero_context_tokens_leaves_window_unset():
+    """``context_tokens == 0`` carries no size information — don't guess a tier."""
+    s = _new()
+    apply(s, {"type": "session.info_reply", "session_id": "s1", "context_tokens": 0})
+    assert s.context_window == 0
+
+
+def test_session_info_reply_uses_daemon_context_window():
+    """The daemon's ``context_window`` (ACP ``usage_update.size``,
+    blemees/blemees-agent#67) is authoritative and may shrink."""
+    s = _new()
+    reply = {"type": "session.info_reply", "session_id": "s1"}
+    apply(s, {**reply, "context_tokens": 50_000, "context_window": 200_000})
+    assert s.context_window == 200_000
+    s.context_window = 1_000_000
+    apply(s, {**reply, "context_tokens": 50_000, "context_window": 200_000})
+    assert s.context_window == 200_000
+
+
+def test_session_info_reply_daemon_context_window_skips_tier_guess():
+    s = _new()
+    apply(
+        s,
+        {
+            "type": "session.info_reply",
+            "session_id": "s1",
+            "context_tokens": 10_000,
+            "context_window": 1_000_000,
+        },
+    )
+    assert s.context_window == 1_000_000
+
+
+def test_session_info_reply_null_context_window_falls_back_to_tier_guess():
+    """Older daemons send no (or a null) ``context_window``."""
+    s = _new()
+    apply(
+        s,
+        {
+            "type": "session.info_reply",
+            "session_id": "s1",
+            "context_tokens": 300_000,
+            "context_window": None,
+        },
+    )
+    assert s.context_window == 1_000_000
+
+
+def _err(code: str) -> dict:
+    return {"type": "session.error", "session_id": "s1", "code": code, "message": code}
+
+
+def test_pending_errors_is_capped_keeping_newest():
+    """Regression (#19): ``pending_errors`` grew without bound."""
+    s = _new()
+    for i in range(50):
+        apply(s, _err(f"e{i}"))
+    assert len(s.pending_errors) == 20
+    assert [e["code"] for e in s.pending_errors] == [f"e{i}" for i in range(30, 50)]
+
+
+def test_successful_result_clears_pending_errors():
+    """Regression (#19): errors stayed forever. A turn that ends with
+    ``stop_reason == "end_turn"`` means the agent recovered — drop them."""
+    s = _new()
+    apply(s, _err("auth_required"))
+    apply_user_prompt(s, "retry")
+    apply(s, {"type": "session.result", "session_id": "s1", "seq": 3, "stop_reason": "end_turn"})
+    assert s.pending_errors == []
+
+
+def test_unsuccessful_result_keeps_pending_errors():
+    """A cancelled / refused / truncated turn is not a recovery — keep them."""
+    s = _new()
+    apply(s, _err("auth_required"))
+    for stop in ("cancelled", "refusal", "max_tokens"):
+        apply_user_prompt(s, "retry")
+        apply(s, {"type": "session.result", "session_id": "s1", "stop_reason": stop})
+    assert [e["code"] for e in s.pending_errors] == ["auth_required"]
 
 
 def test_unknown_frame_type_is_ignored():

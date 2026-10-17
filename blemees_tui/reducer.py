@@ -280,6 +280,11 @@ def _on_result(state: SessionState, frame: dict[str, Any]) -> None:
         turn.usage = turn_usage
         state.cumulative_usage = state.cumulative_usage.merge(turn_usage)
     state.turn_active = False
+    # A turn that completed normally means the agent recovered — drop the
+    # stale error bubbles / footer count. cancelled / refusal / max_tokens
+    # are not a recovery, so errors stay until a clean turn lands (#19).
+    if turn.result_subtype == "end_turn":
+        state.pending_errors.clear()
 
 
 def _on_request_permission(state: SessionState, frame: dict[str, Any]) -> None:
@@ -304,6 +309,12 @@ def _on_session_error(state: SessionState, frame: dict[str, Any]) -> None:
         state.mode = SessionMode.CRASHED
         state.crashed_reason = str(frame.get("message", ""))
     state.pending_errors.append(dict(frame))
+    # Bounded (#19): keep only the newest — the chat pane renders the last
+    # few and the footer shows the count, so older entries add nothing.
+    del state.pending_errors[:-_MAX_PENDING_ERRORS]
+
+
+_MAX_PENDING_ERRORS = 20
 
 
 # ---------------------------------------------------------------------------
@@ -371,9 +382,16 @@ def _round_up_window(tokens: int) -> int:
 
 def _on_session_info_reply(state: SessionState, frame: dict[str, Any]) -> None:
     ctx = frame.get("context_tokens")
+    window = frame.get("context_window")
     if isinstance(ctx, int) and ctx >= 0:
         state.context_tokens = ctx
-        if state.context_window and ctx > state.context_window:
+    if isinstance(window, int) and window > 0:
+        # Authoritative ACP ``usage_update.size`` (blemees-agent#67); may shrink.
+        state.context_window = window
+    elif isinstance(ctx, int) and ctx > 0:
+        # Older daemons: initialise the window on the first non-zero report,
+        # then grow it (never shrink) when usage passes the current tier (#19).
+        if not state.context_window or ctx > state.context_window:
             state.context_window = _round_up_window(ctx)
     if frame.get("model"):
         state.model = str(frame["model"])
@@ -387,15 +405,9 @@ def _on_session_info_reply(state: SessionState, frame: dict[str, Any]) -> None:
         state.last_active_at_ms = last_turn
     cumulative_raw = frame.get("cumulative_usage")
     if isinstance(cumulative_raw, dict):
-        state.cumulative_usage = Usage(
-            input_tokens=int(cumulative_raw.get("input_tokens", 0) or 0),
-            output_tokens=int(cumulative_raw.get("output_tokens", 0) or 0),
-            cache_creation_input_tokens=int(
-                cumulative_raw.get("cache_creation_input_tokens", 0) or 0
-            ),
-            cache_read_input_tokens=int(cumulative_raw.get("cache_read_input_tokens", 0) or 0),
-            reasoning_output_tokens=int(cumulative_raw.get("reasoning_output_tokens", 0) or 0),
-        )
+        # blemees/3 sends ACP camelCase keys; _map_usage falls back to
+        # snake_case. Reading snake_case only zeroed the totals (#19).
+        state.cumulative_usage = _map_usage(cumulative_raw)
 
 
 # ---------------------------------------------------------------------------

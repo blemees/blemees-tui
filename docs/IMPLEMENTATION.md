@@ -12,8 +12,9 @@ The path you'll actually dogfood: open a Claude session, drive a turn,
 see streaming, close, restart, verify history.
 
 1. **Reducer fills.** `agent.system_init` → `started_at_ms`;
-   `agent.session_info_reply` → `context_tokens`. Drop the
-   `options["_notices"]` rate_limits hack — promote to `AppState`.
+   `agent.session_info_reply` → `context_tokens`. (The
+   `options["_notices"]` rate_limits hack was dropped in #19 —
+   `blemees/3` has no notice frame.)
 2. **App plumbing.** Active-session switching (`1`..`9`, `Ctrl+Tab`);
    `turn_active` disables composer (§7.2); composer history recall
    (`Up`/`Down` in empty input, §10).
@@ -53,7 +54,8 @@ silently today.
 
 9. **Inline error bubbles** for session-scoped errors (auth_failed,
    backend_crashed); replay_gap banner.
-10. **Footer chip** wires `! N errors`, `↺ rate`, ctx tokens.
+10. **Footer chip** wires `! N errors`, ctx tokens. (`↺ rate` was dropped
+    in #19 — `blemees/3` has no notice frame.)
 11. **EventLog filter chips** + `[/]` filter + `[s]` save.
 12. **Reconnect banner** ("reconnecting attempt N, next in Ms") — today
     it only goes to the log.

@@ -59,6 +59,9 @@ def _block_to_dict(block: ContentBlock) -> dict[str, Any]:
             "input": block.input,
             "result_text": block.result_text,
             "is_error": block.is_error,
+            "status": block.status,
+            "kind": block.kind,
+            "title": block.title,
         }
     return {"type": "unknown"}
 
@@ -124,12 +127,29 @@ def _block_from_dict(d: dict[str, Any]) -> ContentBlock | None:
             finalized=bool(d.get("finalized", False)),
         )
     if t == "tool_use":
+        result_text = d.get("result_text")
+        is_error = bool(d.get("is_error", False))
+        # ACP tool fields (#19). Absent in older snapshots — kind/title fall
+        # back to the dataclass defaults so those still load (no schema
+        # bump); status is derived from the result so a finished tool does
+        # not restore as pending.
+        status = d.get("status")
+        if not status:
+            if is_error:
+                status = "failed"
+            elif result_text is not None:
+                status = "completed"
+            else:
+                status = "pending"
         return ToolUseBlock(
             tool_use_id=str(d.get("tool_use_id", "")),
             name=str(d.get("name", "")),
             input=d.get("input"),
-            result_text=d.get("result_text"),
-            is_error=bool(d.get("is_error", False)),
+            result_text=result_text,
+            is_error=is_error,
+            status=str(status),
+            kind=str(d.get("kind") or ""),
+            title=str(d.get("title") or ""),
         )
     return None
 

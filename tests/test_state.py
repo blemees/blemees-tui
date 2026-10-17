@@ -17,7 +17,7 @@ def test_usage_merge():
 def test_event_log_bounded():
     log = EventLog(capacity=3)
     for i in range(5):
-        log.append(EventLogSource.NOTICE, "tag", f"m{i}")
+        log.append(EventLogSource.CONNECTION, "tag", f"m{i}")
     snapshot = log.snapshot()
     assert len(snapshot) == 3
     assert [e.message for e in snapshot] == ["m2", "m3", "m4"]
