@@ -141,7 +141,8 @@ def test_tool_block_status_kind_title_round_trip():
 
 def test_old_snapshot_tool_block_without_acp_fields_loads_with_defaults():
     """Snapshots written before the tool fields were persisted must still
-    load (no schema bump) — absent keys fall back to the dataclass defaults."""
+    load (no schema bump) — absent kind/title fall back to the dataclass
+    defaults; the absent status is derived from the result (see below)."""
     payload = session_to_dict(_populated_session())
     tool = payload["turns"][0]["blocks"][1]
     assert tool["type"] == "tool_use"
@@ -152,7 +153,33 @@ def test_old_snapshot_tool_block_without_acp_fields_loads_with_defaults():
     block = restored.turns[0].blocks[1]
     assert isinstance(block, ToolUseBlock)
     assert block.tool_use_id == "tu1"
-    assert (block.status, block.kind, block.title) == ("pending", "", "")
+    # The fixture tool has result_text="contents" → completed, not pending.
+    assert (block.status, block.kind, block.title) == ("completed", "", "")
+
+
+@pytest.mark.parametrize(
+    ("result_text", "is_error", "expected"),
+    [
+        ("boom", True, "failed"),
+        (None, True, "failed"),
+        ("contents", False, "completed"),
+        ("", False, "completed"),
+        (None, False, "pending"),
+    ],
+)
+def test_old_snapshot_tool_status_derived_from_result(result_text, is_error, expected):
+    """Regression (#19 review): a pre-#19 snapshot has no ``status`` key, so
+    a finished tool restored as ``pending`` and kept the pending glyph."""
+    payload = session_to_dict(_populated_session())
+    tool = payload["turns"][0]["blocks"][1]
+    tool.pop("status")
+    tool["result_text"] = result_text
+    tool["is_error"] = is_error
+    restored = session_from_dict(payload)
+    assert restored is not None
+    block = restored.turns[0].blocks[1]
+    assert isinstance(block, ToolUseBlock)
+    assert block.status == expected
 
 
 def test_save_load_delete_round_trip(state_dir):

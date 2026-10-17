@@ -12,8 +12,9 @@ The path you'll actually dogfood: open a Claude session, drive a turn,
 see streaming, close, restart, verify history.
 
 1. **Reducer fills.** `agent.system_init` → `started_at_ms`;
-   `agent.session_info_reply` → `context_tokens`. Drop the
-   `options["_notices"]` rate_limits hack — promote to `AppState`.
+   `agent.session_info_reply` → `context_tokens`. (The
+   `options["_notices"]` rate_limits hack was dropped in #19 —
+   `blemees/3` has no notice frame.)
 2. **App plumbing.** Active-session switching (`1`..`9`, `Ctrl+Tab`);
    `turn_active` disables composer (§7.2); composer history recall
    (`Up`/`Down` in empty input, §10).

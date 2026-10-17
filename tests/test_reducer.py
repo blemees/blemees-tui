@@ -174,13 +174,89 @@ def test_session_info_reply_updates_context_and_usage():
             "context_tokens": 1234,
             "model": "sonnet",
             "cwd": "/proj",
-            "cumulative_usage": {"input_tokens": 100, "output_tokens": 50},
+            "cumulative_usage": {
+                "input_tokens": 100,
+                "output_tokens": 50,
+                "cache_read_input_tokens": 7,
+                "cache_creation_input_tokens": 3,
+            },
         },
     )
     assert s.context_tokens == 1234
     assert s.model == "sonnet"
     assert s.cwd == "/proj"
+    # snake_case (older daemons) still maps.
     assert s.cumulative_usage.input_tokens == 100
+    assert s.cumulative_usage.output_tokens == 50
+    assert s.cumulative_usage.cache_read_input_tokens == 7
+    assert s.cumulative_usage.cache_creation_input_tokens == 3
+
+
+def test_session_info_reply_reads_camelcase_cumulative_usage():
+    """Regression (#19 review): blemees/3 forwards ACP usage dumped by alias,
+    so ``cumulative_usage`` has camelCase keys. The reducer read only
+    snake_case and replaced the cumulative usage with zeros after every turn."""
+    s = _new()
+    apply(
+        s,
+        {
+            "type": "session.info_reply",
+            "session_id": "s1",
+            "cumulative_usage": {
+                "inputTokens": 1000,
+                "outputTokens": 400,
+                "cachedReadTokens": 20_000,
+                "cachedWriteTokens": 3000,
+                "thoughtTokens": 50,
+                "totalTokens": 24_450,
+            },
+        },
+    )
+    u = s.cumulative_usage
+    assert u.input_tokens == 1000
+    assert u.output_tokens == 400
+    assert u.cache_read_input_tokens == 20_000
+    assert u.cache_creation_input_tokens == 3000
+    assert u.reasoning_output_tokens == 50
+
+
+def test_session_info_reply_from_fixed_daemon_sets_context_meter():
+    """A blemees/3 ``session.info_reply`` from a daemon with the
+    blemees-agent#66 fix: ``context_tokens`` = input + cached read + cached
+    write of the last turn; usage payloads are ACP camelCase."""
+    s = _new()
+    apply(
+        s,
+        {
+            "type": "session.info_reply",
+            "session_id": "s1",
+            "id": "req-1",
+            "model": "claude-sonnet-4-5",
+            "cwd": "/proj",
+            "last_seq": 42,
+            "last_turn_at_ms": 1_760_000_000_000,
+            "last_turn_usage": {
+                "inputTokens": 1000,
+                "outputTokens": 400,
+                "cachedReadTokens": 20_000,
+                "cachedWriteTokens": 3000,
+                "totalTokens": 24_400,
+            },
+            "cumulative_usage": {
+                "inputTokens": 5000,
+                "outputTokens": 1200,
+                "cachedReadTokens": 60_000,
+                "cachedWriteTokens": 9000,
+                "totalTokens": 75_200,
+            },
+            "context_tokens": 24_000,
+        },
+    )
+    assert s.context_tokens == 24_000
+    assert s.context_window == 200_000
+    assert s.cumulative_usage.input_tokens == 5000
+    assert s.cumulative_usage.cache_read_input_tokens == 60_000
+    assert s.last_seq == 42
 
 
 def test_session_info_reply_initializes_context_window_from_zero():

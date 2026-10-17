@@ -12,6 +12,7 @@ from textual.app import App  # noqa: E402
 
 from blemees_tui import __version__ as _TUI_VERSION  # noqa: E402
 from blemees_tui.reducer import apply, apply_user_prompt  # noqa: E402
+from blemees_tui.snapshot import session_from_dict, session_to_dict  # noqa: E402
 from blemees_tui.state import (  # noqa: E402
     AppState,
     SessionState,  # noqa: E402
@@ -488,6 +489,46 @@ async def test_result_divider_renders_when_turn_locks_without_duration():
     # No duration known → no seconds bit; a normal end_turn isn't flagged.
     assert "s ·" not in divider
     assert "end_turn" not in divider
+
+
+@pytest.mark.asyncio
+async def test_result_divider_skipped_when_no_usage_and_normal_stop():
+    """Regression (#19 review): ``usage`` is optional on ``session.result``.
+    Without it the divider rendered ``─── ↑0 · ↓0 ───`` on every turn."""
+    sess = _finished_turn("end_turn")
+    _, divider = await _render_single_turn(sess)
+    assert divider is None
+
+
+@pytest.mark.asyncio
+async def test_result_divider_without_usage_shows_only_abnormal_stop_reason():
+    sess = _finished_turn("cancelled")
+    _, divider = await _render_single_turn(sess)
+    assert divider == "─── cancelled ───"
+
+
+@pytest.mark.asyncio
+async def test_result_divider_without_usage_shows_only_duration():
+    sess = _finished_turn("end_turn")
+    sess.turns[-1].duration_ms = 2000
+    _, divider = await _render_single_turn(sess)
+    assert divider == "─── 2.0s ───"
+
+
+@pytest.mark.asyncio
+async def test_result_divider_usage_survives_snapshot_restore():
+    """A snapshot-restored turn keeps its usage, so its divider still shows
+    the token counts; a restored turn without usage still has none."""
+    with_usage = session_from_dict(
+        session_to_dict(_finished_turn("end_turn", usage={"inputTokens": 7, "outputTokens": 9}))
+    )
+    assert with_usage is not None and with_usage.turns[-1].locked
+    _, divider = await _render_single_turn(with_usage)
+    assert divider == "─── ↑7 · ↓9 ───"
+    without_usage = session_from_dict(session_to_dict(_finished_turn("end_turn")))
+    assert without_usage is not None
+    _, divider = await _render_single_turn(without_usage)
+    assert divider is None
 
 
 @pytest.mark.asyncio

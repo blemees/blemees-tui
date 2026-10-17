@@ -400,15 +400,9 @@ def _on_session_info_reply(state: SessionState, frame: dict[str, Any]) -> None:
         state.last_active_at_ms = last_turn
     cumulative_raw = frame.get("cumulative_usage")
     if isinstance(cumulative_raw, dict):
-        state.cumulative_usage = Usage(
-            input_tokens=int(cumulative_raw.get("input_tokens", 0) or 0),
-            output_tokens=int(cumulative_raw.get("output_tokens", 0) or 0),
-            cache_creation_input_tokens=int(
-                cumulative_raw.get("cache_creation_input_tokens", 0) or 0
-            ),
-            cache_read_input_tokens=int(cumulative_raw.get("cache_read_input_tokens", 0) or 0),
-            reasoning_output_tokens=int(cumulative_raw.get("reasoning_output_tokens", 0) or 0),
-        )
+        # blemees/3 sends ACP camelCase keys; _map_usage falls back to
+        # snake_case. Reading snake_case only zeroed the totals (#19).
+        state.cumulative_usage = _map_usage(cumulative_raw)
 
 
 # ---------------------------------------------------------------------------

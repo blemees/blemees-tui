@@ -31,6 +31,7 @@ from ..state import (
     ThinkingBlock,
     ToolUseBlock,
     Turn,
+    Usage,
 )
 
 
@@ -104,25 +105,35 @@ class _TurnBlock(Vertical):
                 self._block_tags.append(tag)
 
         # Result divider — appears once the turn locks (session.result).
-        # blemees/3 doesn't report a duration, so that bit is optional (#19).
+        # blemees/3 doesn't report a duration, and usage on session.result is
+        # optional, so each bit shows only when known (#19). turn.usage stays
+        # the empty Usage() unless usage was reported (live or restored from
+        # a snapshot).
         if turn.locked:
             u = turn.usage
             bits = []
             if turn.duration_ms is not None:
                 bits.append(f"{turn.duration_ms / 1000:.1f}s")
-            bits += [f"↑{u.input_tokens}", f"↓{u.output_tokens}"]
-            if u.reasoning_output_tokens:
-                bits.append(f"🧠 {u.reasoning_output_tokens}")
+            if u != Usage():
+                bits += [f"↑{u.input_tokens}", f"↓{u.output_tokens}"]
+                if u.reasoning_output_tokens:
+                    bits.append(f"🧠 {u.reasoning_output_tokens}")
             # end_turn (ACP) / success (pre-blemees/3 snapshots) are the
             # normal outcomes; flag anything else (cancelled, refusal, …).
             if turn.result_subtype and turn.result_subtype not in _NORMAL_STOP_REASONS:
                 bits.append(f"[red]{turn.result_subtype}[/]")
-            divider = f"─── {' · '.join(bits)} ───"
-            if self._divider is None:
-                self._divider = Static(divider, id="divider")
-                self.mount(self._divider)
+            if not bits:
+                # Nothing to report: no divider, not an empty rule.
+                if self._divider is not None:
+                    self._divider.remove()
+                    self._divider = None
             else:
-                self._divider.update(divider)
+                divider = f"─── {' · '.join(bits)} ───"
+                if self._divider is None:
+                    self._divider = Static(divider, id="divider")
+                    self.mount(self._divider)
+                else:
+                    self._divider.update(divider)
 
     # ------------------------------------------------------------------
     # Per-block widget mount/update
@@ -506,7 +517,9 @@ class ChatPaneWidget(Widget):
                 self._errors_widget.remove()
                 self._errors_widget = None
             return
-        # Render the most recent few; older ones are still in the event log.
+        # Render the most recent few. Session errors are not written to the
+        # event log, and the reducer caps pending_errors and clears them on
+        # end_turn, so older ones are gone from the UI (#48).
         rendered = "\n\n".join(_render_error(e) for e in errs[-5:])
         if self._errors_widget is None:
             self._errors_widget = Static(rendered)
