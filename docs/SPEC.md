@@ -451,7 +451,8 @@ bubble at their wall-clock position **and** land in the event log:
 
 The session keeps at most the 20 newest errors (the bubble shows the last
 5). They clear when a later turn ends with `stop_reason: "end_turn"`; a
-`cancelled` / `refusal` / `max_tokens` turn keeps them.
+`cancelled` / `refusal` / `max_tokens` turn keeps them. The event log
+entry stays after the bubble clears.
 
 ### 9.9 Agent stderr
 

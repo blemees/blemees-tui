@@ -56,6 +56,10 @@ project tracks [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   selected for refinement, deferred, or excluded.
 
 ### Fixed
+- Session errors (`session.error`, and `error` frames with a
+  `session_id`) were kept only in memory, so they were gone after the
+  bubble cleared. They now also go to the event log, tagged with the
+  session, and stay there (#48).
 - `session.stderr` frames were dropped. The agent's stderr lines now
   show dim in the session view (the last 5 of the newest 50), cleared
   when a new turn starts (#49).

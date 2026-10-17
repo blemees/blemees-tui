@@ -298,6 +298,12 @@ class BlemeesTuiApp(App):
                 self._latch_connection_fatal(code, msg)
 
         sid = frame.get("session_id")
+        if isinstance(sid, str) and ftype in ("error", "session.error"):
+            # Session-scope error — log it too, so it stays in the event log
+            # after the bubble clears (end_turn) or the session is dropped (#48).
+            code = str(frame.get("code", ""))
+            msg = str(frame.get("message", ""))
+            self.state.event_log.append(EventLogSource.DAEMON_ERROR, code, msg, session_id=sid)
         if isinstance(sid, str):
             sess = self.state.sessions.get(sid)
             if sess is None and ftype.startswith("session."):
