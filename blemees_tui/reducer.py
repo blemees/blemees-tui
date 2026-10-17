@@ -7,7 +7,8 @@ for the duration of the call.
 
 It consumes ``blemees/3`` frames: ``session.update`` (a verbatim ACP
 ``session/update`` payload), ``session.result``, ``session.opened``,
-``session.error``, and the per-session lifecycle notices. The user turn is
+``session.error``, ``session.stderr`` (agent stderr lines, rate-limited
+here), and the per-session lifecycle notices. The user turn is
 *not* echoed by the daemon, so the app records it locally via
 :func:`apply_user_prompt`.
 
@@ -18,6 +19,7 @@ plan, available commands, mode) are #2.
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
 from acp.schema import TextContent
@@ -317,6 +319,37 @@ def _on_session_error(state: SessionState, frame: dict[str, Any]) -> None:
 _MAX_PENDING_ERRORS = 20
 
 
+# Rate limit for session.stderr (#49). Matches the daemon's
+# ``stderr_rate_lines`` / ``stderr_rate_window_s`` config defaults.
+_STDERR_RATE_LINES = 50
+_STDERR_RATE_WINDOW_S = 10.0
+# Newest stderr lines kept per session (the chat pane shows the last few).
+_MAX_STDERR_LINES = 50
+# Clock indirection so tests can control the rate-limit window.
+_monotonic = time.monotonic
+
+
+def _on_session_stderr(state: SessionState, frame: dict[str, Any]) -> None:
+    """``session.stderr`` carries one line of the agent's process-wide
+    stderr, fanned out to every session. The ACP backend does not
+    rate-limit it, so cap it here: at most ``_STDERR_RATE_LINES`` per
+    ``_STDERR_RATE_WINDOW_S``; lines over the cap are only counted.
+    """
+    line = frame.get("line")
+    if not isinstance(line, str):
+        return
+    now = _monotonic()
+    if not state.stderr_window_count or now - state.stderr_window_start >= _STDERR_RATE_WINDOW_S:
+        state.stderr_window_start = now
+        state.stderr_window_count = 0
+    if state.stderr_window_count >= _STDERR_RATE_LINES:
+        state.stderr_suppressed += 1
+        return
+    state.stderr_window_count += 1
+    state.stderr_lines.append(line)
+    del state.stderr_lines[:-_MAX_STDERR_LINES]
+
+
 # ---------------------------------------------------------------------------
 # Lifecycle / control frames
 # ---------------------------------------------------------------------------
@@ -419,6 +452,7 @@ _HANDLERS = {
     "session.update": _on_session_update,
     "session.result": _on_result,
     "session.error": _on_session_error,
+    "session.stderr": _on_session_stderr,
     "session.opened": _on_session_opened,
     "session.attached": _on_session_opened,  # same replay-window logic
     "session.taken": _on_session_taken,

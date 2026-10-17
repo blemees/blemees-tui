@@ -151,6 +151,15 @@ class SessionState:
     pending_permission: dict[str, Any] | None = None
 
     pending_errors: list[dict[str, Any]] = field(default_factory=list)
+    # Agent stderr lines from ``session.stderr`` (#49), newest last and
+    # bounded by the reducer. The reducer rate-limits them; lines over the
+    # limit only bump ``stderr_suppressed``. ``stderr_window_*`` is the
+    # rate-limit bookkeeping (monotonic start, lines accepted in the window).
+    # Transient UI state; deliberately not snapshotted.
+    stderr_lines: list[str] = field(default_factory=list)
+    stderr_suppressed: int = 0
+    stderr_window_start: float = 0.0
+    stderr_window_count: int = 0
     # Messages typed while the agent was busy. Flushed FIFO when
     # ``agent.result`` lands and ``turn_active`` flips back to False.
     pending_sends: list[str] = field(default_factory=list)

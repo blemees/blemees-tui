@@ -8,6 +8,7 @@ calls, plan, commands, mode) lands with its tests in #2.
 
 from __future__ import annotations
 
+from blemees_tui import reducer
 from blemees_tui.reducer import apply, apply_user_prompt, clear_pending_permission
 from blemees_tui.state import SessionMode, SessionState, TextBlock, ThinkingBlock, ToolUseBlock
 
@@ -354,6 +355,79 @@ def test_unsuccessful_result_keeps_pending_errors():
         apply_user_prompt(s, "retry")
         apply(s, {"type": "session.result", "session_id": "s1", "stop_reason": stop})
     assert [e["code"] for e in s.pending_errors] == ["auth_required"]
+
+
+# ---- #49: session.stderr ------------------------------------------
+
+
+def _stderr(line) -> dict:
+    return {"type": "session.stderr", "session_id": "s1", "line": line}
+
+
+class _Clock:
+    def __init__(self) -> None:
+        self.now = 1000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+def test_session_stderr_appends_line(monkeypatch):
+    monkeypatch.setattr(reducer, "_monotonic", _Clock())
+    s = _new()
+    apply(s, _stderr("warn: something"))
+    assert s.stderr_lines == ["warn: something"]
+    assert s.stderr_suppressed == 0
+
+
+def test_session_stderr_keeps_newest_lines(monkeypatch):
+    clock = _Clock()
+    monkeypatch.setattr(reducer, "_monotonic", clock)
+    s = _new()
+    # Spread over windows so the rate limit does not drop any.
+    for i in range(120):
+        clock.now += 1.0
+        apply(s, _stderr(f"l{i}"))
+    assert s.stderr_suppressed == 0
+    assert s.stderr_lines == [f"l{i}" for i in range(70, 120)]
+
+
+def test_session_stderr_rate_limit_counts_suppressed(monkeypatch):
+    clock = _Clock()
+    monkeypatch.setattr(reducer, "_monotonic", clock)
+    s = _new()
+    for i in range(60):
+        apply(s, _stderr(f"l{i}"))
+    assert s.stderr_lines == [f"l{i}" for i in range(50)]
+    assert s.stderr_suppressed == 10
+
+
+def test_session_stderr_new_window_accepts_again(monkeypatch):
+    clock = _Clock()
+    monkeypatch.setattr(reducer, "_monotonic", clock)
+    s = _new()
+    for i in range(55):
+        apply(s, _stderr(f"a{i}"))
+    assert s.stderr_suppressed == 5
+    clock.now += 9.9  # same window: still dropped
+    apply(s, _stderr("still-limited"))
+    assert s.stderr_suppressed == 6
+    assert s.stderr_lines[-1] == "a49"
+    clock.now += 0.1  # 10 s after the window opened: a new window
+    apply(s, _stderr("fresh"))
+    assert s.stderr_lines[-1] == "fresh"
+    assert s.stderr_suppressed == 6
+
+
+def test_session_stderr_ignores_bad_line(monkeypatch):
+    monkeypatch.setattr(reducer, "_monotonic", _Clock())
+    s = _new()
+    apply(s, {"type": "session.stderr", "session_id": "s1"})
+    apply(s, _stderr(None))
+    apply(s, _stderr(42))
+    assert s.stderr_lines == []
+    assert s.stderr_suppressed == 0
+    assert s.stderr_window_count == 0
 
 
 def test_unknown_frame_type_is_ignored():

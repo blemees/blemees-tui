@@ -255,6 +255,7 @@ class ChatPaneWidget(Widget):
         self._buttons: Horizontal | None = None
         self._banner_state: str = ""  # "watching" | "detached" | "closed" | ""
         self._errors_widget: Static | None = None
+        self._stderr_widget: Static | None = None
         self._gap_widget: Static | None = None
         self._replay_widget: Static | None = None
         self._pending_widget: Static | None = None
@@ -314,6 +315,7 @@ class ChatPaneWidget(Widget):
             # new session's error bubbles / replay banners / permission card
             # never render after a switch (#18).
             self._errors_widget = None
+            self._stderr_widget = None
             self._gap_widget = None
             self._replay_widget = None
             self._perm_widget = None
@@ -366,6 +368,9 @@ class ChatPaneWidget(Widget):
 
         # Inline error bubbles for session-scoped errors (§9.8).
         self._sync_errors(session, scroll)
+
+        # Agent stderr (#49), shown quietly below the errors.
+        self._sync_stderr(session, scroll)
 
         # Locally-queued user messages that landed mid-turn — surface them
         # below the in-flight turn so the user can see what's pending.
@@ -526,6 +531,27 @@ class ChatPaneWidget(Widget):
             scroll.mount(self._errors_widget)
         else:
             self._errors_widget.update(rendered)
+
+    def _sync_stderr(self, session: SessionState, scroll: VerticalScroll) -> None:
+        lines = session.stderr_lines
+        suppressed = session.stderr_suppressed
+        if not lines and not suppressed:
+            if self._stderr_widget is not None:
+                self._stderr_widget.remove()
+                self._stderr_widget = None
+            return
+        # Dim and short: the last few lines only. The reducer keeps a
+        # bounded, rate-limited buffer (#49).
+        rendered_lines = [f"[dim]stderr › {_escape(line)}[/]" for line in lines[-5:]]
+        if suppressed:
+            noun = "line" if suppressed == 1 else "lines"
+            rendered_lines.append(f"[dim]… {suppressed} {noun} suppressed (rate limit)[/]")
+        rendered = "\n".join(rendered_lines)
+        if self._stderr_widget is None:
+            self._stderr_widget = Static(rendered)
+            scroll.mount(self._stderr_widget)
+        else:
+            self._stderr_widget.update(rendered)
 
     def _sync_pending_sends(self, session: SessionState, scroll: VerticalScroll) -> None:
         pending = session.pending_sends
