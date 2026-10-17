@@ -183,6 +183,62 @@ def test_session_info_reply_updates_context_and_usage():
     assert s.cumulative_usage.input_tokens == 100
 
 
+def test_session_info_reply_initializes_context_window_from_zero():
+    """Regression (#19): a fresh session has ``context_window == 0``; the
+    first ``context_tokens`` report must set the window so the ctx meter
+    can render. The old guard needed a non-zero window to update it."""
+    s = _new()
+    assert s.context_window == 0
+    apply(s, {"type": "session.info_reply", "session_id": "s1", "context_tokens": 50_000})
+    assert s.context_window == 200_000
+    # A later report past the tier grows the window to the next tier.
+    apply(s, {"type": "session.info_reply", "session_id": "s1", "context_tokens": 300_000})
+    assert s.context_window == 1_000_000
+    # A smaller report never shrinks it.
+    apply(s, {"type": "session.info_reply", "session_id": "s1", "context_tokens": 10})
+    assert s.context_window == 1_000_000
+
+
+def test_session_info_reply_zero_context_tokens_leaves_window_unset():
+    """``context_tokens == 0`` carries no size information — don't guess a tier."""
+    s = _new()
+    apply(s, {"type": "session.info_reply", "session_id": "s1", "context_tokens": 0})
+    assert s.context_window == 0
+
+
+def _err(code: str) -> dict:
+    return {"type": "session.error", "session_id": "s1", "code": code, "message": code}
+
+
+def test_pending_errors_is_capped_keeping_newest():
+    """Regression (#19): ``pending_errors`` grew without bound."""
+    s = _new()
+    for i in range(50):
+        apply(s, _err(f"e{i}"))
+    assert len(s.pending_errors) == 20
+    assert [e["code"] for e in s.pending_errors] == [f"e{i}" for i in range(30, 50)]
+
+
+def test_successful_result_clears_pending_errors():
+    """Regression (#19): errors stayed forever. A turn that ends with
+    ``stop_reason == "end_turn"`` means the agent recovered — drop them."""
+    s = _new()
+    apply(s, _err("auth_required"))
+    apply_user_prompt(s, "retry")
+    apply(s, {"type": "session.result", "session_id": "s1", "seq": 3, "stop_reason": "end_turn"})
+    assert s.pending_errors == []
+
+
+def test_unsuccessful_result_keeps_pending_errors():
+    """A cancelled / refused / truncated turn is not a recovery — keep them."""
+    s = _new()
+    apply(s, _err("auth_required"))
+    for stop in ("cancelled", "refusal", "max_tokens"):
+        apply_user_prompt(s, "retry")
+        apply(s, {"type": "session.result", "session_id": "s1", "stop_reason": stop})
+    assert [e["code"] for e in s.pending_errors] == ["auth_required"]
+
+
 def test_unknown_frame_type_is_ignored():
     s = _new()
     apply(s, {"type": "totally.unknown", "session_id": "s1", "seq": 1})

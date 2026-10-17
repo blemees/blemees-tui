@@ -424,9 +424,8 @@ info string. Theme configurable via `ui.markdown_code_theme`.
 
 ### 9.6 Notices
 
-- `agent.notice{category:"rate_limits"}` → footer chip
-  (e.g. `↺ resets in 4m`). Yellow on `level:"warn"`.
-- All other notices → event log overlay only (not transcript).
+The `blemees/3` daemon has no notice or rate-limit frame, so the TUI
+renders none (the old `agent.notice` footer chip was removed in #19).
 
 ### 9.7 Result divider
 
@@ -434,8 +433,11 @@ info string. Theme configurable via `ui.markdown_code_theme`.
 ─── 1.4s · ↑320 ↓580 · ctx 14k/200k ──────────────────
 ```
 
-Built from `agent.result.duration_ms` and the normalised `usage`.
-`reasoning_output_tokens` (Codex) shown as `🧠 200` when non-zero.
+Shown once the turn locks (`session.result`). Built from the normalised
+`usage`; the duration bit appears only when `duration_ms` is known
+(`blemees/3` does not report it). `reasoning_output_tokens` (Codex) shown
+as `🧠 200` when non-zero. A `stop_reason` other than `end_turn` (e.g.
+`cancelled`, `refusal`) is appended in red.
 
 ### 9.8 Inline error rendering
 
@@ -446,6 +448,10 @@ bubble at their wall-clock position **and** land in the event log:
 - `backend_crashed` — message + `[Re-open]` button.
 - `agent.result{subtype:"error", error:{code,message}}` — message;
   no inline button.
+
+The session keeps at most the 20 newest errors (the bubble shows the last
+5). They clear when a later turn ends with `stop_reason: "end_turn"`; a
+`cancelled` / `refusal` / `max_tokens` turn keeps them.
 
 ---
 
@@ -576,7 +582,7 @@ Three surfaces, each does one job.
 Always visible:
 
 ```
-● daemon X.Y · claude V codex V · N turns · ctx Tk/Mk · ! N errors · ↺ rate
+● daemon X.Y · claude V codex V · N turns · ctx Tk/Mk · ! N errors
 ```
 
 | Element                | Source                                                              |
@@ -586,12 +592,11 @@ Always visible:
 | Turns                  | Sum of all live sessions' turn counters.                            |
 | Ctx                    | Active session's `context_tokens` from `session_info`.              |
 | `! N errors`           | Unacknowledged daemon errors; click → event log filtered to errors. |
-| `↺ rate`               | Most-recent `agent.notice{rate_limits}` summary.                    |
 
 ### 14.2 Event log overlay (`Ctrl+E`)
 
 ```
-[All] [Daemon errors] [Daemon stderr] [Notices] [TUI internal] [Connection]
+[All] [Daemon errors] [Daemon stderr] [TUI internal] [Connection]
 ─────────────────────────────────────────────────────────────────────────
 HH:MM:SS.mmm  source        session  category           message
 ─────────────────────────────────────────────────────────────────────────
@@ -602,7 +607,6 @@ Sources:
 
 - `daemon-error` — `agent.error` frames (all codes).
 - `daemon-stderr` — `agent.stderr` lines (rate-limited at daemon).
-- `notice` — `agent.notice` frames.
 - `tui-internal` — TUI exceptions, render warnings, parse failures,
   queue stalls.
 - `connection` — hello, opens, closes, takeovers, replay gaps,

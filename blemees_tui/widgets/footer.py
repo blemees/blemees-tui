@@ -6,8 +6,8 @@ each piece sits under the column it describes:
 * **Left** — sidebar-aligned: the connection state chip (``● connected``
   / ``● reconnecting`` / …). Sits in the same column as the sidebar.
 * **Middle** — text-area-aligned: ``blemees v…``, the active session's
-  agent version (``claude v…`` / ``codex v…``), and any rate-limit
-  notice. Starts at the column where the chat / text input begins
+  agent version (``claude v…`` / ``codex v…``). Starts at the column
+  where the chat / text input begins
   (sidebar + chat-pane padding). The context-window meter lives on the
   ``TurnStatusBar`` (right of turns) — it isn't duplicated here.
 * **Right** — pinned: the ``! N errors`` chip. Clicking anywhere on the
@@ -108,14 +108,7 @@ class FooterStatusWidget(Widget):
                 else []
             )
             agent_label = " · ".join(agent_bits) if agent_bits else "no agent"
-        rate_chip = ""
-        if s.rate_limits and s.rate_limits.text:
-            colour = "yellow" if s.rate_limits.level == "warn" else "white"
-            rate_chip = f"[{colour}]↺ {s.rate_limits.text}[/]"
-        info_bits = [f"[dim]blemees v{__version__}[/]", f"[dim]{agent_label}[/]"]
-        if rate_chip:
-            info_bits.append(rate_chip)
-        info_text = " · ".join(info_bits)
+        info_text = f"[dim]blemees v{__version__}[/] · [dim]{agent_label}[/]"
         errors = sum(len(sess.pending_errors) for sess in s.sessions.values())
         errors_text = f"[red]! {errors} errors[/]" if errors else ""
         try:

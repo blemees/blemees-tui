@@ -59,6 +59,9 @@ def _block_to_dict(block: ContentBlock) -> dict[str, Any]:
             "input": block.input,
             "result_text": block.result_text,
             "is_error": block.is_error,
+            "status": block.status,
+            "kind": block.kind,
+            "title": block.title,
         }
     return {"type": "unknown"}
 
@@ -130,6 +133,11 @@ def _block_from_dict(d: dict[str, Any]) -> ContentBlock | None:
             input=d.get("input"),
             result_text=d.get("result_text"),
             is_error=bool(d.get("is_error", False)),
+            # ACP tool fields (#19). Absent in older snapshots — fall back to
+            # the dataclass defaults so those still load (no schema bump).
+            status=str(d.get("status") or "pending"),
+            kind=str(d.get("kind") or ""),
+            title=str(d.get("title") or ""),
         )
     return None
 

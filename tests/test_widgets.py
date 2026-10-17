@@ -14,7 +14,6 @@ from blemees_tui import __version__ as _TUI_VERSION  # noqa: E402
 from blemees_tui.reducer import apply, apply_user_prompt  # noqa: E402
 from blemees_tui.state import (  # noqa: E402
     AppState,
-    RateLimitsNotice,
     SessionState,  # noqa: E402
     ToolUseBlock,
     Turn,
@@ -444,15 +443,79 @@ async def test_todo_panel_hidden_when_every_item_completed():
         assert panel.has_class("-hidden")
 
 
+async def _render_single_turn(sess: SessionState) -> tuple[_TurnBlock, str | None]:
+    app = _ChatOnlyApp()
+    async with app.run_test() as pilot:
+        chat = app.query_one("#chat", ChatPaneWidget)
+        chat.show_session(sess)
+        await pilot.pause()
+        (block,) = list(chat.query(_TurnBlock))
+        divider = block._divider
+        return block, (str(divider.render()) if divider is not None else None)
+
+
+def _finished_turn(stop_reason: str, *, usage: dict | None = None) -> SessionState:
+    sess = SessionState(session_id="s1")
+    apply_user_prompt(sess, "hi")
+    apply(
+        sess,
+        {
+            "type": "session.update",
+            "session_id": "s1",
+            "seq": 2,
+            "update": {
+                "sessionUpdate": "agent_message_chunk",
+                "content": {"type": "text", "text": "hello"},
+            },
+        },
+    )
+    frame = {"type": "session.result", "session_id": "s1", "seq": 3, "stop_reason": stop_reason}
+    if usage is not None:
+        frame["usage"] = usage
+    apply(sess, frame)
+    return sess
+
+
 @pytest.mark.asyncio
-async def test_footer_renders_errors_versions_and_rate_chips():
+async def test_result_divider_renders_when_turn_locks_without_duration():
+    """Regression (#19): blemees/3 never sets ``duration_ms``, so the
+    divider (gated on it) never appeared. It must follow ``turn.locked``."""
+    sess = _finished_turn("end_turn", usage={"inputTokens": 320, "outputTokens": 580})
+    assert sess.turns[-1].duration_ms is None
+    _, divider = await _render_single_turn(sess)
+    assert divider is not None
+    assert "↑320" in divider and "↓580" in divider
+    # No duration known → no seconds bit; a normal end_turn isn't flagged.
+    assert "s ·" not in divider
+    assert "end_turn" not in divider
+
+
+@pytest.mark.asyncio
+async def test_result_divider_shows_duration_and_abnormal_stop_reason():
+    sess = _finished_turn("cancelled")
+    sess.turns[-1].duration_ms = 1400
+    _, divider = await _render_single_turn(sess)
+    assert divider is not None
+    assert "1.4s" in divider
+    assert "cancelled" in divider
+
+
+@pytest.mark.asyncio
+async def test_result_divider_absent_while_turn_in_flight():
+    sess = SessionState(session_id="s1")
+    apply_user_prompt(sess, "hi")
+    _, divider = await _render_single_turn(sess)
+    assert divider is None
+
+
+@pytest.mark.asyncio
+async def test_footer_renders_errors_and_versions():
     state = AppState()
     sess = SessionState(session_id="s", backend="claude")
     sess.pending_errors.append({"code": "auth_failed", "message": "x"})
     state.sessions["s"] = sess
     state.active_session_id = "s"
     state.connection_status = "connected"
-    state.rate_limits = RateLimitsNotice(level="warn", text="resets in 4m", session_id="s")
     state.daemon.daemon = "blemees-agentd/0.11.0"
     state.daemon.agents = {"claude-agent-acp": "2.1"}
     app = _FooterOnlyApp(state)
@@ -465,13 +528,12 @@ async def test_footer_renders_errors_versions_and_rate_chips():
         errors = str(footer.query_one("#footer-errors").render())
         # Connection state lives in the sidebar-aligned status section.
         assert "connected" in status
-        # blemees + active backend versions and rate notice align with the
+        # blemees + active backend versions align with the
         # chat / text-area column.
         assert "blemees" in info
         assert _TUI_VERSION in info
         # The active session's profile name ("claude") is shown in the info slot.
         assert "claude" in info
-        assert "resets in 4m" in info
         # Errors are pinned to the right.
         assert "1 errors" in errors
         assert "1 errors" not in info

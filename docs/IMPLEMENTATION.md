@@ -53,7 +53,8 @@ silently today.
 
 9. **Inline error bubbles** for session-scoped errors (auth_failed,
    backend_crashed); replay_gap banner.
-10. **Footer chip** wires `! N errors`, `↺ rate`, ctx tokens.
+10. **Footer chip** wires `! N errors`, ctx tokens. (`↺ rate` was dropped
+    in #19 — `blemees/3` has no notice frame.)
 11. **EventLog filter chips** + `[/]` filter + `[s]` save.
 12. **Reconnect banner** ("reconnecting attempt N, next in Ms") — today
     it only goes to the log.

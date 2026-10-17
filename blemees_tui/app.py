@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import asyncio
 import os
-import time
 import uuid
 from collections import deque
 from typing import Any
@@ -39,7 +38,6 @@ from .state import (
     AppState,
     DaemonInfo,
     EventLogSource,
-    RateLimitsNotice,
     SessionMode,
     SessionState,
 )
@@ -383,21 +381,6 @@ class BlemeesTuiApp(App):
         exc = task.exception()
         if exc is not None:
             self.state.event_log.append(EventLogSource.DAEMON_ERROR, "reconcile_crashed", repr(exc))
-
-    def _on_notice(self, session_id: str, frame: dict[str, Any]) -> None:
-        category = str(frame.get("category", ""))
-        level = str(frame.get("level", "info"))
-        text = str(frame.get("text", ""))
-        data = frame.get("data") if isinstance(frame.get("data"), dict) else {}
-        self.state.event_log.append(EventLogSource.NOTICE, category, text, session_id=session_id)
-        if category == "rate_limits":
-            self.state.rate_limits = RateLimitsNotice(
-                level=level,
-                text=text,
-                data=dict(data or {}),
-                session_id=session_id,
-                received_at_ms=int(time.time() * 1000),
-            )
 
     def _schedule_refresh_roster(self) -> None:
         if self._connection is None:

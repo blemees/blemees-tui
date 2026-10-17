@@ -24,7 +24,6 @@ _SOURCES = [
     ("All", None),
     ("Daemon errors", EventLogSource.DAEMON_ERROR),
     ("Daemon stderr", EventLogSource.DAEMON_STDERR),
-    ("Notices", EventLogSource.NOTICE),
     ("TUI internal", EventLogSource.TUI_INTERNAL),
     ("Connection", EventLogSource.CONNECTION),
 ]

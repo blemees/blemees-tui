@@ -179,7 +179,6 @@ class SessionState:
 class EventLogSource(StrEnum):
     DAEMON_ERROR = "daemon-error"
     DAEMON_STDERR = "daemon-stderr"
-    NOTICE = "notice"
     TUI_INTERNAL = "tui-internal"
     CONNECTION = "connection"
 
@@ -189,7 +188,7 @@ class EventLogEntry:
     ts_ms: int
     source: EventLogSource
     session_id: str | None
-    category: str  # short tag — e.g. "rate_limits", "auth_failed", "hello"
+    category: str  # short tag — e.g. "auth_failed", "hello"
     message: str
     context: dict[str, Any] = field(default_factory=dict)
 
@@ -257,17 +256,6 @@ class DaemonInfo:
 
 
 @dataclass
-class RateLimitsNotice:
-    """Most-recent ``agent.notice{category:rate_limits}`` payload (§9.6)."""
-
-    level: str = "info"  # "info" | "warn"
-    text: str = ""
-    data: dict[str, Any] = field(default_factory=dict)
-    session_id: str | None = None
-    received_at_ms: int = 0
-
-
-@dataclass
 class AppState:
     daemon: DaemonInfo = field(default_factory=DaemonInfo)
     sessions: dict[str, SessionState] = field(default_factory=dict)
@@ -275,7 +263,6 @@ class AppState:
     event_log: EventLog = field(default_factory=EventLog)
     connection_status: str = "disconnected"  # connected | reconnecting | disconnected
     reconnect_attempt: int = 0
-    rate_limits: RateLimitsNotice | None = None
 
     def visible_session_items(self) -> list[tuple[str, SessionState]]:
         """``(sid, session)`` pairs in the active profile, insertion order.

@@ -103,17 +103,19 @@ class _TurnBlock(Vertical):
                 self._block_widgets.append(self._mount_block(block, show_thinking))
                 self._block_tags.append(tag)
 
-        # Result divider — appears once the turn locks.
-        if turn.duration_ms is not None:
+        # Result divider — appears once the turn locks (session.result).
+        # blemees/3 doesn't report a duration, so that bit is optional (#19).
+        if turn.locked:
             u = turn.usage
-            bits = [
-                f"{turn.duration_ms / 1000:.1f}s",
-                f"↑{u.input_tokens}",
-                f"↓{u.output_tokens}",
-            ]
+            bits = []
+            if turn.duration_ms is not None:
+                bits.append(f"{turn.duration_ms / 1000:.1f}s")
+            bits += [f"↑{u.input_tokens}", f"↓{u.output_tokens}"]
             if u.reasoning_output_tokens:
                 bits.append(f"🧠 {u.reasoning_output_tokens}")
-            if turn.result_subtype and turn.result_subtype != "success":
+            # end_turn (ACP) / success (pre-blemees/3 snapshots) are the
+            # normal outcomes; flag anything else (cancelled, refusal, …).
+            if turn.result_subtype and turn.result_subtype not in _NORMAL_STOP_REASONS:
                 bits.append(f"[red]{turn.result_subtype}[/]")
             divider = f"─── {' · '.join(bits)} ───"
             if self._divider is None:
@@ -680,6 +682,9 @@ def _format_tool(block: ToolUseBlock) -> RenderableType:
         colour = "red" if failed else "dim"
         head += f"\n  [{colour}]→ {_escape(preview)}[/]"
     return head
+
+
+_NORMAL_STOP_REASONS = frozenset({"end_turn", "success"})
 
 
 # ACP tool-call status glyphs (#2): pending → in_progress → completed | failed.
