@@ -10,14 +10,12 @@ restarts.
 > what's next, and [`docs/PARITY_BACKLOG.md`](docs/PARITY_BACKLOG.md) for
 > the curated parity backlog.
 
-![blemees-tui screenshot placeholder](docs/screenshot.png)
-
 ## Why
 
 Claude Code and Codex are great in their own terminal, but bouncing between
 sessions, recovering from a closed shell, or watching a long-running
 agent from a second machine all leave you stitching tabs together by hand.
-`blemees-tui` is a thin presentation layer over [`blemees-agentd`](https://github.com/blemees/blemees-daemon)
+`blemees-tui` is a thin presentation layer over [`blemees-agentd`](https://github.com/blemees/blemees-agent)
 that keeps every session live in one window:
 
 - **Multi-session sidebar** with keyboard navigation (`Ctrl+1..0`,
@@ -51,7 +49,7 @@ pipx install blemees-tui
 brew install blemees/tap/blemees-tui
 ```
 
-Requires Python ≥ 3.11 and a running `blemees-agentd ≥ 0.9.0` Unix socket.
+Requires Python ≥ 3.11 and a running `blemees-agentd ≥ 0.11.0` Unix socket.
 
 ## Quickstart
 
@@ -71,7 +69,7 @@ blemees --socket /path/to/agentd.sock
 | Switch session | `F1`–`F12`, `Ctrl+Tab` |
 | Switch to session ≥ 13 | `:select 13` |
 | Close current session | `Ctrl+W` |
-| Delete current session | `Ctrl+Shift+W` |
+| Delete current session (asks to confirm) | `Ctrl+Shift+W` |
 | Interrupt turn | `Ctrl+C` |
 | Force reconnect | `Ctrl+R` |
 | Event log overlay | `Ctrl+E` |
@@ -87,55 +85,51 @@ for TUI commands — see `:help`.
 
 ## Configuration
 
-`$XDG_CONFIG_HOME/blemees/tui.toml` (or `~/.config/blemees/tui.toml`):
+`$XDG_CONFIG_HOME/blemees/tui.toml` (or `~/.config/blemees/tui.toml`; point
+elsewhere with `--config` or `$BLEMEES_TUI_CONFIG`). Unknown keys are ignored.
+A `--config` or `$BLEMEES_TUI_CONFIG` path that does not exist is an error.
+Agent, model and permission settings come from the daemon profile you pick
+when you open a session, not from this file.
 
 ```toml
 [connection]
 socket = ""                    # empty = auto-resolve
 
-[defaults]
-backend = ""                   # empty = first advertised by hello_ack
-claude_model = "sonnet"
-codex_model = "gpt-5.2-codex"
-claude_permission_mode = "default"
-codex_sandbox = "workspace-write"
-
 [ui]
 theme = "dark"                 # dark | light
-sidebar_width = 28
 show_thinking = false
-markdown_code_theme = "monokai"
 
 [logging]
 level = "info"                 # debug | info | warn | error
-keep_days = 7
+keep_days = 7                  # daily log files to keep
 ```
 
 CLI overrides:
 
 ```sh
-blemees --socket /tmp/blemees-agentd.sock --log-level debug
+blemees --config ~/alt-tui.toml --socket /tmp/blemees-agentd.sock --log-level debug
 ```
 
-Env-var overrides: `BLEMEES_AGENTD_SOCKET`, `BLEMEES_TUI_THEME`,
-`BLEMEES_TUI_LOG_LEVEL`, `BLEMEES_TUI_BACKEND`.
+Env-var overrides: `BLEMEES_TUI_CONFIG`, `BLEMEES_TUI_SOCKET`,
+`BLEMEES_TUI_THEME`, `BLEMEES_TUI_LOG_LEVEL`. `BLEMEES_AGENTD_SOCKET` is used
+when no socket is set. Precedence: CLI flags > env vars > config file >
+defaults.
 
 ## Persistence
 
 Files under `$XDG_STATE_HOME/blemees/tui/`:
 
 - `sessions.json` — index of live + watching sessions.
-- `history.json` — bounded ring (200 entries) of closed-but-remembered sessions.
 - `snapshots/<id>.json` — full per-session in-memory state cached to disk
   so a TUI restart skips the full daemon replay.
 - `transcripts/` — `Ctrl+S` Markdown exports.
-- `tui.log` — rotating log (weekly, 7 keep).
+- `tui.log` — log, rotated daily; keeps `logging.keep_days` old files (default 7).
 
 ## Develop
 
 ```sh
 pip install -e '.[dev]'
-pytest                          # 85 tests
+pytest                          # full suite
 ruff check .
 ruff format --check .
 ```

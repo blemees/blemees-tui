@@ -1,9 +1,12 @@
 """TOML config loader (spec §12).
 
-Override precedence: env vars (``BLEMEES_TUI_*``) > CLI flags > config file
-> built-in defaults. CLI overrides are applied by ``__main__`` after the
-config file is loaded; this module knows about defaults, file parsing, and
-env-var overlays.
+Override precedence: CLI flags > env vars (``BLEMEES_TUI_*``) > config file
+> built-in defaults. CLI overrides are applied by the app after the config
+file and env vars are loaded; this module knows about defaults, file
+parsing, and env-var overlays.
+
+Config file path: ``load_config(path)`` arg (``--config``) >
+``$BLEMEES_TUI_CONFIG`` > :func:`default_config_path`.
 """
 
 from __future__ import annotations
@@ -13,6 +16,11 @@ import tomllib
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any
+
+
+class ConfigError(ValueError):
+    """The config file the user chose (``--config`` / ``$BLEMEES_TUI_CONFIG``) is unusable."""
+
 
 # ---------------------------------------------------------------------------
 # Dataclass shape
@@ -25,21 +33,9 @@ class ConnectionConfig:
 
 
 @dataclass(frozen=True)
-class DefaultsConfig:
-    backend: str = ""  # empty = first advertised by hello_ack
-    claude_model: str = "sonnet"
-    codex_model: str = "gpt-5.2-codex"
-    claude_permission_mode: str = "default"
-    codex_sandbox: str = "workspace-write"
-    cwd: str = ""  # empty = $PWD at launch
-
-
-@dataclass(frozen=True)
 class UiConfig:
     theme: str = "dark"  # dark | light
-    sidebar_width: int = 28
     show_thinking: bool = False
-    markdown_code_theme: str = "monokai"
 
 
 @dataclass(frozen=True)
@@ -51,10 +47,8 @@ class LoggingConfig:
 @dataclass(frozen=True)
 class Config:
     connection: ConnectionConfig = field(default_factory=ConnectionConfig)
-    defaults: DefaultsConfig = field(default_factory=DefaultsConfig)
     ui: UiConfig = field(default_factory=UiConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
-    keybindings: dict[str, str] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -87,7 +81,6 @@ def _coerce(target_type: type, raw: Any) -> Any:
 
 _SECTIONS: dict[str, type] = {
     "connection": ConnectionConfig,
-    "defaults": DefaultsConfig,
     "ui": UiConfig,
     "logging": LoggingConfig,
 }
@@ -110,8 +103,22 @@ def _build_section(section_cls: type, raw: dict[str, Any] | None):
 
 
 def load_config(path: Path | None = None) -> Config:
-    """Load + validate config from disk (or built-in defaults if absent)."""
-    cfg_path = path or default_config_path()
+    """Load + validate config from disk (or built-in defaults if absent).
+
+    Unknown sections and keys are ignored, so config files written for
+    older versions keep loading. A missing file at the default path means
+    built-in defaults; a missing file the user chose (``path`` /
+    ``$BLEMEES_TUI_CONFIG``) raises :class:`ConfigError`.
+    """
+    env_path = os.environ.get("BLEMEES_TUI_CONFIG")
+    if path is not None:
+        cfg_path, source = path, "--config"
+    elif env_path:
+        cfg_path, source = Path(env_path).expanduser(), "$BLEMEES_TUI_CONFIG"
+    else:
+        cfg_path, source = default_config_path(), None
+    if source is not None and not cfg_path.exists():
+        raise ConfigError(f"config file not found: {cfg_path} (from {source})")
     raw: dict[str, Any] = {}
     if cfg_path.exists():
         with cfg_path.open("rb") as fh:
@@ -120,12 +127,7 @@ def load_config(path: Path | None = None) -> Config:
     sections: dict[str, Any] = {
         name: _build_section(cls, raw.get(name)) for name, cls in _SECTIONS.items()
     }
-    keybindings_raw = raw.get("keybindings") or {}
-    if not isinstance(keybindings_raw, dict):
-        raise ValueError("[keybindings] must be a table of action → key strings")
-    keybindings = {str(k): str(v) for k, v in keybindings_raw.items()}
-
-    cfg = Config(**sections, keybindings=keybindings)
+    cfg = Config(**sections)
     return apply_env_overrides(cfg)
 
 
@@ -139,8 +141,6 @@ _ENV_OVERRIDES: dict[str, tuple[str, str]] = {
     "BLEMEES_TUI_SOCKET": ("connection", "socket"),
     "BLEMEES_TUI_THEME": ("ui", "theme"),
     "BLEMEES_TUI_LOG_LEVEL": ("logging", "level"),
-    "BLEMEES_TUI_BACKEND": ("defaults", "backend"),
-    "BLEMEES_TUI_CWD": ("defaults", "cwd"),
 }
 
 

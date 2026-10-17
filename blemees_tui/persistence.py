@@ -181,7 +181,7 @@ _LEVELS = {
 
 
 def configure_logger(level: str = "info", keep_days: int = 7) -> logging.Logger:
-    """Configure the rotating ``tui.log`` handler.
+    """Configure the daily-rotating ``tui.log`` handler (keeps ``keep_days`` old files).
 
     Idempotent — repeated calls re-use the existing handler. Returns the
     package logger.
@@ -201,7 +201,7 @@ def configure_logger(level: str = "info", keep_days: int = 7) -> logging.Logger:
         return logger
 
     handler = logging.handlers.TimedRotatingFileHandler(
-        expected, when="W0", backupCount=keep_days, encoding="utf-8"
+        expected, when="midnight", backupCount=keep_days, encoding="utf-8"
     )
     handler.setFormatter(
         logging.Formatter(

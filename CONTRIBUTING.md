@@ -38,13 +38,13 @@ python -m venv .venv && source .venv/bin/activate
 pip install -e '.[dev]'
 ```
 
-Requires Python ≥ 3.11 and a running `blemees-agentd ≥ 0.9.0` if you want to
+Requires Python ≥ 3.11 and a running `blemees-agentd ≥ 0.11.0` if you want to
 exercise the live socket path.
 
 ## Run the tests
 
 ```sh
-pytest                          # full suite (~85 tests, ~2 s)
+pytest                          # full suite
 pytest tests/test_reducer.py    # one file
 pytest -k snapshot              # one keyword
 ```
@@ -93,7 +93,8 @@ CI (when added) will run both.
 
 ## Spec & protocol
 
-The wire protocol the TUI speaks is documented in `blemees-daemon` (the
+The wire protocol the TUI speaks is documented in
+[`blemees-agent`](https://github.com/blemees/blemees-agent) (the
 `blemees-agent/1` protocol). The TUI's contract — state model, persistence
 shape, observability — lives in [`docs/SPEC.md`](docs/SPEC.md). When
 behaviour changes, edit the spec first and the code second.

@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import logging
+import logging.handlers
 from pathlib import Path
 
 from blemees_tui.persistence import (
     StoredSession,
     atomic_write_json,
+    configure_logger,
     load_sessions,
+    log_path,
     save_sessions,
     slugify,
     transcript_filename,
@@ -124,3 +128,21 @@ def test_load_sessions_corrupt_returns_empty(tmp_path: Path):
     p = tmp_path / "bad.json"
     p.write_text("{not json", encoding="utf-8")
     assert load_sessions(p) == []
+
+
+def test_log_rotates_daily_keeping_keep_days_files(isolated_state_dir: Path):
+    logger = configure_logger(keep_days=5)
+    handler = next(
+        h
+        for h in logger.handlers
+        if isinstance(h, logging.handlers.TimedRotatingFileHandler)
+        and Path(h.baseFilename) == log_path()
+    )
+    try:
+        # backupCount counts rotated files, so rotation must be daily for
+        # keep_days to mean days.
+        assert handler.when == "MIDNIGHT"
+        assert handler.backupCount == 5
+    finally:
+        logger.removeHandler(handler)
+        handler.close()

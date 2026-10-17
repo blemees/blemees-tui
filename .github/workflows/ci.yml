@@ -51,9 +51,8 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
       - name: Install (editable) with dev extras
-        # The TUI depends on `blemees-agent`. CI installs from PyPI by
-        # default; for testing against an unreleased agent change, use
-        # the `agent-source` workflow_dispatch input below.
+        # The TUI is a socket client of `blemees-agent` and does not
+        # import it; the tests need only the package's own deps from PyPI.
         run: uv pip install --system -e ".[dev]"
       - name: Run pytest
         run: pytest -q

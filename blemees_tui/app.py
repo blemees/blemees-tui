@@ -12,6 +12,7 @@ import os
 import time
 import uuid
 from collections import deque
+from pathlib import Path
 from typing import Any
 
 from textual.app import App, ComposeResult
@@ -55,7 +56,13 @@ from .widgets import (
     TodoPanel,
     TurnStatusBar,
 )
-from .widgets.modals import AgentEditorModal, AttachModal, HelpModal, NewSessionModal
+from .widgets.modals import (
+    AgentEditorModal,
+    AttachModal,
+    ConfirmModal,
+    HelpModal,
+    NewSessionModal,
+)
 
 
 class BlemeesTuiApp(App):
@@ -140,13 +147,14 @@ class BlemeesTuiApp(App):
         # when opening a session.
         self._profile_override = profile_override
         self.config_obj: Config = apply_cli_overrides(
-            load_config(),
+            load_config(Path(config_path_override).expanduser() if config_path_override else None),
             socket=socket_override,
             log_level=log_level_override,
         )
         configure_logger(
             level=self.config_obj.logging.level, keep_days=self.config_obj.logging.keep_days
         )
+        self.theme = "textual-light" if self.config_obj.ui.theme == "light" else "textual-dark"
 
         self.state = AppState()
         self._connection: Connection | None = None
@@ -886,8 +894,20 @@ class BlemeesTuiApp(App):
     async def action_close_session(self) -> None:
         await self._close_active(delete=False)
 
-    async def action_delete_session(self) -> None:
-        await self._close_active(delete=True)
+    def action_delete_session(self) -> None:
+        sid = self.state.active_session_id
+        sess = self.state.sessions.get(sid) if sid else None
+        if sess is None:
+            return
+
+        async def _on_confirm(confirmed: bool | None) -> None:
+            # Delete the session the prompt named, even if focus moved since.
+            if confirmed and sid in self.state.sessions:
+                await self._close_session_by_id(sid, delete=True)
+                self._refresh_ui()
+
+        title = sess.title or sid[:8]
+        self.push_screen(ConfirmModal(f'Delete session "{title}"?'), _on_confirm)
 
     async def action_interrupt(self) -> None:
         sid = self.state.active_session_id
