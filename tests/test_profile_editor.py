@@ -587,6 +587,27 @@ async def test_save_typed_existing_name_loads_instead_of_replacing(isolated_stat
 
 
 @pytest.mark.asyncio
+async def test_save_typed_existing_name_names_replaced_fields(isolated_state_dir, monkeypatch):
+    # Review r2 nit: the load replaces typed values; the error must name them.
+    _Fakes(monkeypatch)
+    app = BlemeesTuiApp()
+    async with app.run_test() as pilot:
+        app.action_edit_agents()
+        await pilot.pause()
+        modal = app.screen
+        assert isinstance(modal, AgentEditorModal)
+        modal.query_one("#p-name", Input).value = "mine"
+        modal.query_one("#p-model", Input).value = "opus"
+        modal.query_one("#p-agent_command", Input).value = "claude-agent-acp"  # same as stored
+        await pilot.pause()
+        modal.query_one("#save").press()
+        await pilot.pause()
+        error = _plain(modal.query_one("#p-error", Label))
+        assert "the stored values replaced what you typed in: model —" in error
+        assert "agent_command" not in error
+
+
+@pytest.mark.asyncio
 async def test_name_changed_and_back_restores_edit_mode(isolated_state_dir, monkeypatch):
     # Review r1 #2: mine → min → mine must still save the merged spec.
     fakes = _Fakes(monkeypatch)

@@ -552,11 +552,18 @@ class AgentEditorModal(ModalScreen):
             # A name typed without Enter may be an existing profile: create
             # would fail with profile_exists and the app's update fallback
             # would replace the whole profile with this small spec (#12 r1).
+            typed = self._fields()
             outcome = await self._load(name)
             if outcome == "loaded":
-                self._set_error(
-                    f"loaded existing profile {name!r} — check the fields and Save again"
-                )
+                loaded = self._fields()
+                lost = [f for f, v in typed.items() if v.strip() and v.strip() != loaded[f]]
+                msg = f"loaded existing profile {name!r} — check the fields and Save again"
+                if lost:
+                    msg = (
+                        f"loaded existing profile {name!r}; the stored values replaced what"
+                        f" you typed in: {', '.join(lost)} — re-enter them, then Save again"
+                    )
+                self._set_error(msg)
                 return
             if outcome.startswith("error:"):
                 self._set_error(f"not saved: {outcome.removeprefix('error:')}")
