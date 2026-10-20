@@ -866,7 +866,18 @@ class BlemeesTuiApp(App):
         )
 
     def action_edit_agents(self) -> None:
-        self.push_screen(AgentEditorModal(default_profile=self._profile_override or ""))
+        async def _fetch_profile(name: str) -> dict[str, Any]:
+            # profile.get (#12): the full spec, so the editor can pre-fill.
+            if self._connection is None:
+                raise ConnectionError_("not connected")
+            return await self._connection.get_profile(name)
+
+        self.push_screen(
+            AgentEditorModal(
+                default_profile=self._profile_override or "",
+                fetch_profile=_fetch_profile,
+            )
+        )
 
     def action_attach(self) -> None:
         async def _fetch() -> list[dict[str, Any]]:
@@ -1049,25 +1060,40 @@ class BlemeesTuiApp(App):
         self._refresh_ui()
 
     async def on_agent_editor_modal_save_profile(self, msg: AgentEditorModal.SaveProfile) -> None:
+        # Edit mode (#12) keeps the editor open until the outcome is known.
+        editor = self.screen if msg.update and isinstance(self.screen, AgentEditorModal) else None
         if self._connection is None:
+            if editor is not None:
+                editor.show_save_error("not connected")
             return
-        # Create, falling back to update if the profile already exists (#25/#5).
         try:
-            try:
-                await self._connection.create_profile(msg.name, msg.spec)
-            except ConnectionError_ as exc:
-                if "profile_exists" in str(exc):
-                    await self._connection.update_profile(msg.name, msg.spec)
-                else:
-                    raise
+            if msg.update:
+                # Edit mode (#12): the spec is the fetched one, merged.
+                await self._connection.update_profile(msg.name, msg.spec)
+            else:
+                # Create, falling back to update if the profile already
+                # exists (#25/#5).
+                try:
+                    await self._connection.create_profile(msg.name, msg.spec)
+                except ConnectionError_ as exc:
+                    if "profile_exists" in str(exc):
+                        await self._connection.update_profile(msg.name, msg.spec)
+                    else:
+                        raise
         except ConnectionError_ as exc:
-            # agent_unavailable / profile_protected / … surface, don't crash.
+            # agent_unavailable / profile_protected / an unresolvable
+            # "<redacted>" (invalid_message) … surface, don't crash. The
+            # daemon's message names paths like ``mcp_servers[1]`` — escape it.
             self.state.event_log.append(
                 EventLogSource.DAEMON_ERROR, "profile_save_failed", str(exc)
             )
-            self.notify(f"Profile {msg.name!r} not saved: {exc}", severity="error")
+            self.notify(_escape_markup(f"Profile {msg.name!r} not saved: {exc}"), severity="error")
+            if editor is not None and self.screen is editor:
+                editor.show_save_error(str(exc))
             self._refresh_ui()
             return
+        if editor is not None and self.screen is editor:
+            self.pop_screen()
         self.state.event_log.append(EventLogSource.CONNECTION, "profile_saved", msg.name)
         self.notify(f"Profile {msg.name!r} saved.")
         self._refresh_ui()

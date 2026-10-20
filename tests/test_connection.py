@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from blemees_tui.connection import Connection, FatalProtocolError, _BackoffPolicy
+from blemees_tui.connection import Connection, ConnectionError_, FatalProtocolError, _BackoffPolicy
 
 HELLO_ACK = {
     "type": "hello_ack",
@@ -214,9 +214,32 @@ async def test_session_unknown_on_restore_untracks_and_forwards(short_tmpdir):
         await server.wait_closed()
 
 
+# profile.info as blemees-agentd sends it (#12): secrets redacted, keys kept.
+PROFILE_INFO = {
+    "type": "profile.info",
+    "name": "mine",
+    "source": "dynamic",
+    "profile": {
+        "name": "mine",
+        "agents": {
+            "default": {
+                "command": "claude-agent-acp",
+                "args": [],
+                "model": "sonnet",
+                "mcp_servers": [{"name": "fs", "command": "fs-mcp", "env": {"T": "<redacted>"}}],
+                "env": {"ANTHROPIC_API_KEY": "<redacted>"},
+            }
+        },
+        "permission_policy": {"mode": "relay", "detached": "stall"},
+        "notify": {"webhook_url": "<redacted>", "format": "ntfy"},
+        "attention": {"triggers": ["permission"]},
+    },
+}
+
+
 @pytest.mark.asyncio
 async def test_profile_crud_verbs(short_tmpdir):
-    """list/create/update/delete map to the right frames + ack types (#5)."""
+    """list/create/update/delete/get map to the right frames + ack types (#5/#12)."""
     socket_path = short_tmpdir / "p.sock"
     received: list[dict] = []
 
@@ -248,6 +271,18 @@ async def test_profile_crud_verbs(short_tmpdir):
                         writer,
                         {"type": "profile.deleted", "id": frame.get("id"), "name": frame["name"]},
                     )
+                elif t == "profile.get" and frame["name"] == "mine":
+                    _writeln(writer, {**PROFILE_INFO, "id": frame.get("id")})
+                elif t == "profile.get":
+                    _writeln(
+                        writer,
+                        {
+                            "type": "error",
+                            "id": frame.get("id"),
+                            "code": "profile_unknown",
+                            "message": f"no profile {frame['name']!r}",
+                        },
+                    )
                 await writer.drain()
         except asyncio.IncompleteReadError:
             pass
@@ -270,6 +305,13 @@ async def test_profile_crud_verbs(short_tmpdir):
         assert created["name"] == "mine"
         deleted = await conn.delete_profile("mine")
         assert deleted["name"] == "mine"
+        info = await conn.get_profile("mine")
+        assert info["source"] == "dynamic"
+        assert info["profile"] == PROFILE_INFO["profile"]
+        get_frame = next(f for f in received if f.get("type") == "profile.get")
+        assert get_frame["name"] == "mine"
+        with pytest.raises(ConnectionError_, match="profile_unknown"):
+            await conn.get_profile("nope")
         sent_types = [f.get("type") for f in received]
         assert "profile.create" in sent_types and "profile.delete" in sent_types
         await conn.stop()
