@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import copy
 import json
+import shlex
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -77,19 +78,20 @@ def build_profile_spec(
     """Build a profile spec (the ``profile`` object for profile.create/update).
 
     Blank fields are omitted so the daemon keeps its defaults. ``args`` is
-    whitespace-split; ``mcp_servers`` is a JSON array; ``env`` is a JSON object
+    split shell-style (``shlex.split``: quote an arg that holds a space);
+    ``mcp_servers`` is a JSON array; ``env`` is a JSON object
     of string→string. When ``agent_name`` is given the agent is placed under an
     ``agents`` table keyed by that name; otherwise it becomes the profile's
     single ``agent``.
 
     Raises ``ValueError`` if ``mcp_servers``/``env`` aren't valid JSON of the
-    expected shape.
+    expected shape, or ``args`` has an unbalanced quote.
     """
     agent: dict[str, Any] = {}
     if agent_command.strip():
         agent["agent_command"] = agent_command.strip()
     if args.strip():
-        agent["args"] = args.split()
+        agent["args"] = shlex.split(args)
     if model.strip():
         agent["model"] = model.strip()
     if agent_home.strip():
@@ -140,7 +142,7 @@ def profile_fields(spec: dict[str, Any], agent: str | None = None) -> dict[str, 
 
     ``agent`` picks the agent; when ``None`` or unknown, the first one in the
     ``agents`` table is used (``agent_name`` names the one chosen, ``""`` when
-    the profile has none). ``args`` is space-joined; ``env`` and
+    the profile has none). ``args`` is shell-quoted (``shlex.join``); ``env`` and
     ``mcp_servers`` are compact JSON (blank when empty). ``"<redacted>"``
     values are returned as-is.
     """
@@ -163,7 +165,7 @@ def profile_fields(spec: dict[str, Any], agent: str | None = None) -> dict[str, 
         "agent_name": name,
         # The daemon reads ``agent_command`` ahead of ``command``.
         "agent_command": _s(entry.get("agent_command") or entry.get("command")),
-        "args": " ".join(str(a) for a in _agent_args(entry)),
+        "args": shlex.join(str(a) for a in _agent_args(entry)),
         "model": _s(entry.get("model")),
         "agent_home": _s(entry.get("agent_home")),
         "env": json.dumps(env) if env else "",
@@ -186,8 +188,9 @@ def merge_profile_spec(
     become empty; ``model``/``agent_home``/``command``/permission
     keys/``webhook_url`` are removed). ``"<redacted>"`` strings are sent back
     verbatim, so the daemon keeps the stored secret. A field left exactly as
-    :func:`profile_fields` showed it keeps the stored value verbatim (so e.g.
-    an arg containing a space survives the space-joined round trip).
+    :func:`profile_fields` showed it keeps the stored value verbatim; a changed
+    ``args`` is parsed with ``shlex.split`` (an unbalanced quote raises
+    ``ValueError``).
 
     The command is written to ``command`` (``agent_command``/``agent_args``
     aliases are dropped). A changed ``agent_name`` renames the edited agent;
@@ -218,7 +221,7 @@ def merge_profile_spec(
         entry["command"] = command
     else:
         entry.pop("command", None)
-    entry["args"] = vals["args"].split() if _changed("args") else args
+    entry["args"] = shlex.split(vals["args"]) if _changed("args") else args
     for field in ("model", "agent_home"):
         value = vals[field].strip()
         if value:
@@ -283,11 +286,18 @@ class AgentEditorModal(ModalScreen):
     """Define an agent and save it onto a profile.
 
     With a ``fetch_profile`` callback (``profile.get``), a known profile name
-    (``default_profile`` on mount, or Enter in the profile field) switches the
-    dialog into edit mode: every field is pre-filled and Save sends a
-    ``profile.update`` built on the fetched spec. In edit mode the dialog stays
-    open until the app reports the outcome — :meth:`show_save_error` keeps the
-    user's edits so a refused secret can be re-entered.
+    (``default_profile`` on mount, Enter in the profile field, or Save on a
+    name not loaded yet) loads it: every field is pre-filled and, while the
+    profile field holds the loaded name, Save sends a ``profile.update``
+    built on the fetched spec. Save on a typed name that turns out to exist
+    only loads it, so the small create spec never replaces the profile. In
+    edit mode the dialog stays open until the app reports the outcome —
+    :meth:`show_save_error` keeps the user's edits so a refused secret can be
+    re-entered.
+
+    With the profile field moved away from the loaded name the dialog is in
+    create mode with the loaded values as a template; Save is refused while a
+    field still holds ``"<redacted>"`` (the daemon does not copy secrets).
     """
 
     BINDINGS = [("escape", "dismiss", "Cancel")]
@@ -342,12 +352,16 @@ class AgentEditorModal(ModalScreen):
 
     @property
     def editing(self) -> bool:
-        """True when Save will update the loaded profile (edit mode)."""
-        return self._base is not None
+        """True when Save will update the loaded profile (edit mode): a
+        profile is loaded and the profile field holds its name."""
+        return self._base is not None and self._profile_name() == self._loaded_name
+
+    def _profile_name(self) -> str:
+        return self.query_one("#p-name", Input).value.strip()
 
     def compose(self) -> ComposeResult:
         with VerticalScroll(id="agent-editor-box"):
-            yield Label("[b]Add agent to profile[/b]")
+            yield Label(self._TITLE_CREATE, id="p-title")
             yield Label("profile (Enter loads an existing one):")
             yield Input(value=self._default_profile, placeholder="my-profile", id="p-name")
             yield Label("", id="p-status")
@@ -377,6 +391,9 @@ class AgentEditorModal(ModalScreen):
                 yield Button("Save", id="save", variant="success")
                 yield Button("Delete profile", id="delete", variant="error")
 
+    _TITLE_CREATE = "[b]Add agent to profile[/b]"
+    _TITLE_EDIT = "[b]Edit profile[/b]"
+
     # Field name (build_profile_spec keyword) → Input id.
     _INPUTS = {
         "agent_name": "#p-agent_name",
@@ -398,21 +415,53 @@ class AgentEditorModal(ModalScreen):
     async def on_input_submitted(self, event: Input.Submitted) -> None:
         if event.input.id == "p-name":
             await self._load(event.value.strip())
-        elif event.input.id == "p-agent_name" and self._base is not None:
+        elif event.input.id == "p-agent_name" and self.editing and self._base is not None:
             # Switch the edited agent when the name is one of the profile's.
             name = event.value.strip()
             if name in (self._base.get("agents") or {}) and name != self._edit_agent:
+                if self._agent_dirty():
+                    # One Save writes one agent: don't drop these edits.
+                    self._set_error(
+                        f"unsaved changes to {self._edit_agent!r} — Save first or revert them"
+                    )
+                    return
+                self._set_error("")
                 self._edit_agent = name
                 self._fill(profile_fields(self._base, name))
                 self._show_edit_status()
 
     def on_input_changed(self, event: Input.Changed) -> None:
-        # Renaming the profile away from the loaded one drops the edit state:
-        # Save then creates a new profile, as before #12.
+        # The loaded profile stays as the base when the name changes, so a
+        # name changed and changed back is in edit mode again (#12 r1).
         if event.input.id == "p-name" and self._base is not None:
-            if event.value.strip() != self._loaded_name:
-                self._clear_edit_state()
-                self._set_status("[dim]new profile — Save creates it[/]")
+            self._refresh_mode()
+
+    def _agent_dirty(self) -> bool:
+        """True when a field (other than agent name) differs from the loaded
+        values of the edited agent."""
+        shown = profile_fields(self._base or {}, self._edit_agent)
+        current = self._fields()
+        return any(current[f] != shown[f] for f in FIELDS if f != "agent_name")
+
+    def _refresh_mode(self) -> None:
+        """Title, status and hint for edit mode vs. a copy of the loaded one."""
+        title = self.query_one("#p-title", Label)
+        hint = self.query_one("#p-hint", Label)
+        if self.editing:
+            title.update(self._TITLE_EDIT)
+            hint.update(f'[dim]"{REDACTED}" keeps the stored secret; replace it to change it.[/]')
+            self._show_edit_status()
+            return
+        title.update(self._TITLE_CREATE)
+        hint.update("")
+        name = self._profile_name()
+        if self._base is not None and name:
+            self._set_status(
+                f"[$warning]new profile {_escape(repr(name))} — secrets are not copied;"
+                " re-enter them[/]"
+            )
+        else:
+            self._set_status("")
 
     def _fields(self) -> dict[str, str]:
         return {f: self.query_one(sel, Input).value for f, sel in self._INPUTS.items()}
@@ -427,46 +476,51 @@ class AgentEditorModal(ModalScreen):
     def _set_error(self, text: str) -> None:
         self.query_one("#p-error", Label).update(f"[red]{_escape(text)}[/]" if text else "")
 
-    def _clear_edit_state(self) -> None:
-        self._base = None
-        self._loaded_name = ""
-        self._source = ""
-        self._edit_agent = ""
-        self.query_one("#p-hint", Label).update("")
+    async def _load(self, name: str) -> str:
+        """Fetch ``name`` via ``profile.get`` and enter edit mode (#12).
 
-    async def _load(self, name: str) -> None:
-        """Fetch ``name`` via ``profile.get`` and enter edit mode (#12)."""
+        Returns ``"loaded"``, ``"new"`` (``profile_unknown``, or an old daemon
+        without ``profile.get``: ``unknown_message``) or ``"error:<text>"``.
+        A miss keeps an earlier loaded profile as the base, so its name typed
+        again is in edit mode again.
+        """
         if not name or self._fetch_one is None:
-            return
+            return "new"
         self._set_error("")
         try:
             reply = await self._fetch_one(name)
         except Exception as exc:  # noqa: BLE001 — surface, don't crash
-            self._clear_edit_state()
-            if "profile_unknown" in str(exc):
-                self._set_status("[dim]new profile — Save creates it[/]")
-            else:
-                self._set_status(f"[red]profile.get failed: {_escape(str(exc))}[/]")
-            return
+            text = str(exc)
+            code = text.split(":", 1)[0].strip()
+            if code in ("profile_unknown", "unknown_message"):
+                if self._base is not None:
+                    self._refresh_mode()
+                elif code == "unknown_message":
+                    self._set_status("[dim]the daemon has no profile.get — Save creates it[/]")
+                else:
+                    self._set_status("[dim]new profile — Save creates it[/]")
+                return "new"
+            self._set_status(f"[red]profile.get failed: {_escape(text)}[/]")
+            return f"error:profile.get failed: {text}"
         spec = reply.get("profile") if isinstance(reply, dict) else None
         if not isinstance(spec, dict):
-            self._clear_edit_state()
             self._set_status("[red]profile.get returned no profile[/]")
-            return
+            return "error:profile.get returned no profile"
         self._base = copy.deepcopy(spec)
         self._loaded_name = name
         self._source = str(reply.get("source") or "")
         values = profile_fields(self._base)
         self._edit_agent = values["agent_name"]
         self._fill(values)
-        self._show_edit_status()
-        self.query_one("#p-hint", Label).update(
-            f'[dim]"{REDACTED}" keeps the stored secret; replace it to change it.[/]'
-        )
+        self._refresh_mode()
+        return "loaded"
 
     def _show_edit_status(self) -> None:
         agents = list((self._base or {}).get("agents") or {})
         text = f"[b]editing[/] {_escape(self._loaded_name)}"
+        text += (
+            f"  [dim](a new agent name renames {_escape(repr(self._edit_agent or 'default'))})[/]"
+        )
         if len(agents) > 1:
             listed = ", ".join(_escape(a) for a in agents)
             text += f"  [dim]agents: {listed} — editing[/] {_escape(self._edit_agent)}"
@@ -483,19 +537,40 @@ class AgentEditorModal(ModalScreen):
         self.query_one("#save", Button).disabled = False
         self._set_error(f"not saved: {message}")
 
-    def on_button_pressed(self, event: Button.Pressed) -> None:
+    async def on_button_pressed(self, event: Button.Pressed) -> None:
         bid = event.button.id or ""
         if bid == "save":
-            self._do_save()
+            await self._do_save()
         elif bid == "delete":
             self._do_delete()
 
-    def _do_save(self) -> None:
-        name = self.query_one("#p-name", Input).value.strip()
+    async def _do_save(self) -> None:
+        name = self._profile_name()
         if not name:
             return
+        if not self.editing and self._fetch_one is not None:
+            # A name typed without Enter may be an existing profile: create
+            # would fail with profile_exists and the app's update fallback
+            # would replace the whole profile with this small spec (#12 r1).
+            outcome = await self._load(name)
+            if outcome == "loaded":
+                self._set_error(
+                    f"loaded existing profile {name!r} — check the fields and Save again"
+                )
+                return
+            if outcome.startswith("error:"):
+                self._set_error(f"not saved: {outcome.removeprefix('error:')}")
+                return
         fields = self._fields()
-        editing = self._base is not None and name == self._loaded_name
+        editing = self.editing
+        if not editing:
+            kept = [f for f in FIELDS if REDACTED in fields[f]]
+            if kept:
+                self._set_error(
+                    f'not saved: {", ".join(kept)} still hold "{REDACTED}"; a new profile '
+                    "gets no stored secrets — re-enter those values"
+                )
+                return
         try:
             if editing:
                 spec = merge_profile_spec(self._base or {}, agent=self._edit_agent, **fields)

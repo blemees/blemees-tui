@@ -9,6 +9,7 @@ import pytest
 
 from blemees_tui.widgets.modals.agent_editor import (
     REDACTED,
+    build_profile_spec,
     merge_profile_spec,
     profile_fields,
 )
@@ -50,7 +51,7 @@ def test_profile_fields_prefills_every_field():
     assert profile_fields(SPEC) == {
         "agent_name": "default",
         "agent_command": "claude-agent-acp",
-        "args": "--flag has space",
+        "args": "--flag 'has space'",
         "model": "sonnet",
         "agent_home": "/home/a",
         "env": '{"API_KEY": "<redacted>"}',
@@ -178,6 +179,20 @@ def test_rename_allowed_without_env_placeholders():
     assert spec["agents"]["default"] == SPEC["agents"]["default"]
 
 
+def test_changed_args_keep_quoted_space():
+    # Review r1 #4: args are shell-quoted, so a changed field keeps "has space".
+    fields = profile_fields(SPEC)
+    fields["args"] += " --new"
+    spec = merge_profile_spec(SPEC, **fields)
+    assert spec["agents"]["default"]["args"] == ["--flag", "has space", "--new"]
+    fields["args"] = "--flag 'has space"
+    with pytest.raises(ValueError, match="No closing quotation"):
+        merge_profile_spec(SPEC, **fields)
+    assert build_profile_spec(args="a 'b c'") == {"agent": {"args": ["a", "b c"]}}
+    with pytest.raises(ValueError):
+        build_profile_spec(args='"open')
+
+
 def test_invalid_json_raises():
     fields = profile_fields(SPEC)
     fields["mcp_servers"] = '{"not": "a list"}'
@@ -229,6 +244,8 @@ class _Fakes:
 
         async def create_profile(self, name, spec):
             fakes.created.append((name, spec))
+            if name == "mine":
+                raise ConnectionError_(f"profile_exists: profile {name!r} exists")
             return {"type": "profile.created", "name": name}
 
         async def update_profile(self, name, spec):
@@ -278,7 +295,7 @@ async def test_editor_prefills_existing_profile(isolated_state_dir, monkeypatch)
         assert modal.editing
         assert _value(modal, "#p-agent_name") == "default"
         assert _value(modal, "#p-agent_command") == "claude-agent-acp"
-        assert _value(modal, "#p-args") == "--flag has space"
+        assert _value(modal, "#p-args") == "--flag 'has space'"
         assert _value(modal, "#p-model") == "sonnet"
         assert _value(modal, "#p-agent_home") == "/home/a"
         assert _value(modal, "#p-env") == '{"API_KEY": "<redacted>"}'
@@ -398,7 +415,8 @@ async def test_unknown_profile_stays_in_create_mode(isolated_state_dir, monkeypa
 
 
 @pytest.mark.asyncio
-async def test_renaming_profile_drops_edit_state(isolated_state_dir, monkeypatch):
+async def test_copy_to_new_name_refuses_redacted_then_creates(isolated_state_dir, monkeypatch):
+    # Review r1 #3: a copy gets no stored secrets, so "<redacted>" must go.
     fakes = _Fakes(monkeypatch)
     app = BlemeesTuiApp()
     async with app.run_test() as pilot:
@@ -407,10 +425,126 @@ async def test_renaming_profile_drops_edit_state(isolated_state_dir, monkeypatch
         modal.query_one("#p-name", Input).value = "copy"
         await pilot.pause()
         assert not modal.editing
+        status = _plain(modal.query_one("#p-status", Label))
+        assert "new profile 'copy' — secrets are not copied; re-enter them" in status
+        assert _plain(modal.query_one("#p-hint", Label)) == ""
+        assert _plain(modal.query_one("#p-title", Label)) == "Add agent to profile"
+        modal.query_one("#save").press()
+        await pilot.pause()
+        assert fakes.created == [] and fakes.updated == []
+        assert app.screen is modal
+        error = _plain(modal.query_one("#p-error", Label))
+        assert "env, mcp_servers, notify_webhook" in error and "re-enter" in error
+        modal.query_one("#p-env", Input).value = '{"API_KEY": "sk-copy"}'
+        modal.query_one("#p-mcp", Input).value = ""
+        modal.query_one("#p-notify_webhook", Input).value = "https://hook"
+        modal.query_one("#save").press()
+        await pilot.pause()
+        assert fakes.fetched == ["mine", "copy", "copy"]  # each Save checks again
+        assert fakes.updated == []
+        [(name, spec)] = fakes.created
+        assert name == "copy"
+        agent = spec["agents"]["default"]
+        assert agent["env"] == {"API_KEY": "sk-copy"}
+        assert agent["args"] == ["--flag", "has space"]
+        assert spec["notify"] == {"webhook_url": "https://hook"}
+
+
+@pytest.mark.asyncio
+async def test_old_daemon_without_profile_get_creates(isolated_state_dir, monkeypatch):
+    fakes = _Fakes(monkeypatch)
+
+    async def old(self, name):
+        raise ConnectionError_("unknown_message: unknown message type 'profile.get'")
+
+    monkeypatch.setattr("blemees_tui.connection.Connection.get_profile", old)
+    app = BlemeesTuiApp()
+    async with app.run_test() as pilot:
+        app.action_edit_agents()
+        await pilot.pause()
+        modal = app.screen
+        modal.query_one("#p-name", Input).value = "fresh"
+        modal.query_one("#p-model", Input).value = "opus"
+        modal.query_one("#save").press()
+        await pilot.pause()
+        assert fakes.created == [("fresh", {"agent": {"model": "opus"}})]
+
+
+@pytest.mark.asyncio
+async def test_save_fetch_error_does_not_save(isolated_state_dir, monkeypatch):
+    fakes = _Fakes(monkeypatch)
+
+    async def broken(self, name):
+        raise ConnectionError_("internal: boom [x]")
+
+    monkeypatch.setattr("blemees_tui.connection.Connection.get_profile", broken)
+    app = BlemeesTuiApp()
+    async with app.run_test() as pilot:
+        app.action_edit_agents()
+        await pilot.pause()
+        modal = app.screen
+        modal.query_one("#p-name", Input).value = "mine"
+        modal.query_one("#save").press()
+        await pilot.pause()
+        assert fakes.created == [] and fakes.updated == []
+        assert app.screen is modal
+        assert "not saved: profile.get failed: internal: boom [x]" in _plain(
+            modal.query_one("#p-error", Label)
+        )
+
+
+@pytest.mark.asyncio
+async def test_edit_title_and_rename_hint(isolated_state_dir, monkeypatch):
+    _Fakes(monkeypatch)
+    app = BlemeesTuiApp()
+    async with app.run_test() as pilot:
+        app.action_edit_agents()
+        await pilot.pause()
+        modal = app.screen
+        assert _plain(modal.query_one("#p-title", Label)) == "Add agent to profile"
+        modal = await _open_editor(app, pilot, "mine")
+        assert _plain(modal.query_one("#p-title", Label)) == "Edit profile"
+        assert "a new agent name renames 'default'" in _plain(modal.query_one("#p-status", Label))
+
+
+@pytest.mark.asyncio
+async def test_agent_switch_refused_with_unsaved_changes(isolated_state_dir, monkeypatch):
+    # Review r1 #5: Enter on another agent name would drop the edits.
+    _Fakes(monkeypatch)
+    app = BlemeesTuiApp()
+    async with app.run_test() as pilot:
+        modal = await _open_editor(app, pilot, "mine")
+        modal.query_one("#p-model", Input).value = "opus"
+        agent_input = modal.query_one("#p-agent_name", Input)
+        agent_input.focus()
+        agent_input.value = "reviewer"
+        await pilot.press("enter")
+        await pilot.pause()
+        assert _value(modal, "#p-model") == "opus"
+        assert _value(modal, "#p-agent_command") == "claude-agent-acp"
+        assert "unsaved changes to 'default' — Save first or revert them" in _plain(
+            modal.query_one("#p-error", Label)
+        )
+        # Reverted: the switch goes through.
+        modal.query_one("#p-model", Input).value = "sonnet"
+        agent_input.focus()
+        await pilot.press("enter")
+        await pilot.pause()
+        assert _value(modal, "#p-agent_command") == "codex-acp"
+        assert "editing reviewer" in _plain(modal.query_one("#p-status", Label))
+
+
+@pytest.mark.asyncio
+async def test_unbalanced_quote_in_args_is_shown(isolated_state_dir, monkeypatch):
+    fakes = _Fakes(monkeypatch)
+    app = BlemeesTuiApp()
+    async with app.run_test() as pilot:
+        modal = await _open_editor(app, pilot, "mine")
+        modal.query_one("#p-args", Input).value = "--flag 'has space"
         modal.query_one("#save").press()
         await pilot.pause()
         assert fakes.updated == []
-        assert [n for n, _ in fakes.created] == ["copy"]
+        assert "No closing quotation" in _plain(modal.query_one("#p-error", Label))
 
 
 @pytest.mark.asyncio
@@ -426,3 +560,51 @@ async def test_fetch_error_is_shown_not_fatal(isolated_state_dir, monkeypatch):
         modal = await _open_editor(app, pilot, "mine")
         assert not modal.editing
         assert "internal: boom [x]" in _plain(modal.query_one("#p-status", Label))
+
+
+@pytest.mark.asyncio
+async def test_save_typed_existing_name_loads_instead_of_replacing(isolated_state_dir, monkeypatch):
+    # Review r1 #1: the name typed without Enter, then Save. The old flow sent
+    # create → profile_exists → update with the small spec (a full replace).
+    fakes = _Fakes(monkeypatch)
+    app = BlemeesTuiApp()
+    async with app.run_test() as pilot:
+        app.action_edit_agents()
+        await pilot.pause()
+        modal = app.screen
+        assert isinstance(modal, AgentEditorModal)
+        modal.query_one("#p-name", Input).value = "mine"
+        modal.query_one("#p-model", Input).value = "opus"
+        await pilot.pause()
+        modal.query_one("#save").press()
+        await pilot.pause()
+        assert ("mine", {"agent": {"model": "opus"}}) not in fakes.updated
+        assert fakes.updated == [] and fakes.created == []
+        assert app.screen is modal and modal.editing
+        assert _value(modal, "#p-agent_command") == "claude-agent-acp"
+        assert _value(modal, "#p-model") == "sonnet"
+        assert "loaded existing profile 'mine'" in _plain(modal.query_one("#p-error", Label))
+
+
+@pytest.mark.asyncio
+async def test_name_changed_and_back_restores_edit_mode(isolated_state_dir, monkeypatch):
+    # Review r1 #2: mine → min → mine must still save the merged spec.
+    fakes = _Fakes(monkeypatch)
+    app = BlemeesTuiApp()
+    async with app.run_test() as pilot:
+        modal = await _open_editor(app, pilot, "mine")
+        modal.query_one("#p-model", Input).value = "opus"
+        name_input = modal.query_one("#p-name", Input)
+        name_input.value = "min"
+        await pilot.pause()
+        name_input.value = "mine"
+        await pilot.pause()
+        assert modal.editing
+        assert "editing mine" in _plain(modal.query_one("#p-status", Label))
+        assert "keeps the stored secret" in _plain(modal.query_one("#p-hint", Label))
+        modal.query_one("#save").press()
+        await pilot.pause()
+        assert fakes.created == []  # update=True: no create attempt
+        expected = copy.deepcopy(SPEC)
+        expected["agents"]["default"]["model"] = "opus"
+        assert fakes.updated == [("mine", expected)]
