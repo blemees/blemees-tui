@@ -355,6 +355,15 @@ class Connection:
         profiles = reply.get("profiles") or []
         return list(profiles) if isinstance(profiles, list) else []
 
+    async def get_profile(self, name: str) -> dict[str, Any]:
+        """``profile.get`` (#12): the reply carries ``name``, ``source``
+        (``config`` | ``dynamic``) and ``profile``, the full editable spec with
+        secrets as ``"<redacted>"``. Unknown name raises ``profile_unknown``."""
+        return await self._request(
+            {"type": "profile.get", "name": name},
+            ack_types=("profile.info",),
+        )
+
     async def create_profile(self, name: str, spec: dict[str, Any]) -> dict[str, Any]:
         return await self._request(
             {"type": "profile.create", "name": name, "profile": spec},

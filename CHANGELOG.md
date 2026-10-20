@@ -7,6 +7,12 @@ project tracks [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **Profile editor pre-fills from `profile.get` (#12).** Loading an existing
+  profile fills every field; Save sends a `profile.update` on top of the
+  daemon's full spec, so other agents, `notify.format` and `attention` are
+  kept. `"<redacted>"` keeps a stored secret. A refused update (e.g.
+  `cannot resolve <redacted> for …mcp_servers[1]…`) is shown in the editor,
+  which stays open.
 - **End-to-end smoke (#13).** `tests/test_e2e_smoke.py` drives the TUI
   through Textual's `Pilot` against a real `blemees-agentd` and
   `claude-agent-acp`: connect, open under a profile, prompt + stream,
